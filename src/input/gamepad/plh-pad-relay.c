@@ -2,7 +2,8 @@
  * device interface (volatile registry keys, redone at every wineserver start), then relays the
  * gamepad events queued by the driver to plh-bridge (input service, PLH_MSG_INPUT_GAMEPAD).
  *
- * Usage: plh-pad-relay.exe [--install PATH_TO_SYS] [--setup-only] [--seconds N] [-v]
+ * Usage: plh-pad-relay.exe [--install PATH_TO_SYS] [--setup-only] [--uninstall] [--seconds N] [-v]
+ * --uninstall stops and deletes the driver service and its file, then exits (prefix left clean).
  * Prints READY once the interface is published. */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -86,6 +87,26 @@ static int install_driver(const char *src)
     return ok;
 }
 
+static int uninstall_driver(void)
+{
+    WCHAR dst[MAX_PATH];
+    SC_HANDLE m = OpenSCManagerW(NULL, NULL, SC_MANAGER_ALL_ACCESS);
+    if (!m) return 0;
+    SC_HANDLE s = OpenServiceW(m, SVC_NAME, SERVICE_ALL_ACCESS);
+    if (s) {
+        SERVICE_STATUS ss;
+        ControlService(s, SERVICE_CONTROL_STOP, &ss);
+        Sleep(300);
+        DeleteService(s);
+        CloseServiceHandle(s);
+    }
+    CloseServiceHandle(m);
+    GetSystemDirectoryW(dst, MAX_PATH);
+    wcscat(dst, L"\\drivers\\plh-vigem.sys");
+    DeleteFileW(dst);
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
     const char *sys = NULL;
@@ -93,9 +114,10 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--install") && i + 1 < argc) sys = argv[++i];
         else if (!strcmp(argv[i], "--setup-only")) setup_only = 1;
+        else if (!strcmp(argv[i], "--uninstall")) return uninstall_driver() ? 0 : 1;
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) secs = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-v")) verbose = 1;
-        else { fprintf(stderr, "usage: plh-pad-relay.exe [--install PATH_TO_SYS] [--setup-only] [--seconds N] [-v]\n"); return 2; }
+        else { fprintf(stderr, "usage: plh-pad-relay.exe [--install PATH_TO_SYS] [--setup-only] [--uninstall] [--seconds N] [-v]\n"); return 2; }
     }
     if (!install_driver(sys)) return 1;
     if (!publish_interface()) { fprintf(stderr, "cannot publish the device interface\n"); return 1; }
