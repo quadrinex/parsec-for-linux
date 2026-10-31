@@ -14,6 +14,7 @@ This project is not affiliated with Parsec. See `NOTICE.md`.
 | Encoding | AMF (`amfrt64.dll`) | The project's `amfrt64.dll`; VA-API through `plh-bridge` |
 | Input | `SendInput` | `plh-input-hook.exe`; uinput through `plh-bridge` |
 | Audio | WASAPI loopback | Wine, to the PipeWire monitor of the default output |
+| Gamepads | ViGEm interface | The project's `plh-vigem.sys`, in the prefix under Wine; a uinput Xbox 360 pad through `plh-bridge` |
 | Clipboard (text) | Windows API | `plh-clipsync.exe` and `plh-clipd.sh` |
 
 Parsec's binaries are not modified. Neither is the system Wine: the project uses its own patched copy and a dedicated prefix.
@@ -67,7 +68,7 @@ From the tested machine, 1080p:
 - Hardware encoding through the Parsec path uses AMF, then VA-API. NVIDIA and Vulkan Video are not available.
 - Capturing all 3 screens at once caps at about 30 FPS; one screen holds about 60.
 - H.264 is limited to 4096 px wide on the tested GPU.
-- Gamepads are not supported.
+- Gamepads: the mechanism is proven with a ViGEmClient-like probe, not yet with a real Parsec client. Rumble is not sent back to the client.
 - `SetCursorPos` does not reach the real desktop; Parsec only used `SendInput` in the observed sessions.
 - Clipboard is text only and has not been tried with a real client.
 - Portal and X11 capture are not validated on real desktops other than KDE.

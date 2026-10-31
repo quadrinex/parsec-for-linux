@@ -77,6 +77,7 @@ DEFAULT_ENV = {
     "PLH_ENC_DEVICE": "/dev/dri/renderD128",
     "PLH_AMF_LOG": "",
     "PLH_ENABLE_INPUT": "1",
+    "PLH_ENABLE_GAMEPAD": "1",
     "PLH_INPUT_BACKEND": "uinput",
     "PLH_INPUT_MOUSE_MODE": "abs",
     "PLH_ENABLE_CLIPBOARD": "1",
@@ -665,6 +666,8 @@ class ParsecConfigWindow(QMainWindow):
             "Enable redirection of SendInput input to the real KDE desktop (uinput)"
         )
         inp_form.addRow("Input injection:", self.chk_enable_input)
+        self.chk_enable_gamepad = QCheckBox("Enable the virtual gamepad (Xbox 360, uinput)")
+        inp_form.addRow("Gamepads:", self.chk_enable_gamepad)
 
         self.combo_mouse_mode = QComboBox()
         self.combo_mouse_mode.addItem("Absolute (Desktop & applications — Recommended)", "abs")
@@ -957,6 +960,7 @@ class ParsecConfigWindow(QMainWindow):
         self.edit_amf_log.setText(cfg.get("PLH_AMF_LOG", ""))
 
         self.chk_enable_input.setChecked(cfg.get("PLH_ENABLE_INPUT", "1") == "1")
+        self.chk_enable_gamepad.setChecked(cfg.get("PLH_ENABLE_GAMEPAD", "1") == "1")
         idx_mm = self.combo_mouse_mode.findData(cfg.get("PLH_INPUT_MOUSE_MODE", "abs"))
         self.combo_mouse_mode.setCurrentIndex(idx_mm if idx_mm >= 0 else 0)
 
@@ -983,6 +987,7 @@ class ParsecConfigWindow(QMainWindow):
             "PLH_ENC_DEVICE": self.combo_dri_dev.currentText().strip() or "/dev/dri/renderD128",
             "PLH_AMF_LOG": self.edit_amf_log.text().strip(),
             "PLH_ENABLE_INPUT": "1" if self.chk_enable_input.isChecked() else "0",
+            "PLH_ENABLE_GAMEPAD": "1" if self.chk_enable_gamepad.isChecked() else "0",
             "PLH_INPUT_BACKEND": "uinput" if self.chk_enable_input.isChecked() else "off",
             "PLH_INPUT_MOUSE_MODE": self.combo_mouse_mode.currentData(),
             "PLH_ENABLE_CLIPBOARD": "1" if self.chk_enable_clipboard.isChecked() else "0",

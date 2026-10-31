@@ -23,6 +23,7 @@ start() {
 
 stop() {
     # Order: the relay first (it releases keys and buttons on exit), then the daemon.
+    pkill -f 'plh-pad-relay\.exe' 2>/dev/null
     pkill -f 'plh-input-hook\.exe' 2>/dev/null
     pkill -f 'plh-clipsync\.exe' 2>/dev/null
     pkill -f 'plh-clipd\.sh' 2>/dev/null
@@ -35,11 +36,12 @@ stop() {
 
 status() {
     local rc=0 name pat
-    for name in parsecd plh-bridge plh-input-hook plh-clipd plh-clipsync; do
+    for name in parsecd plh-bridge plh-input-hook plh-pad-relay plh-clipd plh-clipsync; do
         case $name in
             parsecd) pat='parsecd\.exe' ;;
             plh-bridge) pat='build/bridge/plh-bridge' ;;
             plh-input-hook) pat='plh-input-hook\.exe' ;;
+            plh-pad-relay) pat='plh-pad-relay\.exe' ;;
             plh-clipd) pat='plh-clipd\.sh' ;;
             plh-clipsync) pat='plh-clipsync\.exe' ;;
         esac

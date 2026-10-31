@@ -7,7 +7,7 @@ Nothing is "done" without a test that proves it. Last update: 2026-10-30 (start)
 |---|---|---|---|
 | 1 | Windows Parsec under Wine, connected, visible as a host | **done** | real connections, account logged in, host visible |
 | 2 | Client sees the real desktop, 3 screens, 1080p60, hardware encoding | **done** (one screen at a time) | user validation; log: last readings 57.7–60 FPS, L 13.7–14.9 ms; bridge `encode: h264 1920x1080`, vaapi backend; encoding latency alone: t21 p50 4.5 ms at 720p, N1 p50 3.16 ms at native 1080p |
-| 3 | Precise keyboard/mouse on 3 screens, sound (bonus: gamepad, clipboard) | **done**; gamepad not done; clipboard not tried with a real client | user validation "yes to all", t30, t40, t41 |
+| 3 | Precise keyboard/mouse on 3 screens, sound (bonus: gamepad, clipboard) | **done**; gamepad proven by probe only; clipboard not tried with a real client | user validation "yes to all", t30, t40, t41 |
 | 4 | `bin/parsec-linux-host start|stop|status` + user systemd service | **done** | enable, systemctl start/stop, disable tested |
 | 5 | `make test` passes | **done** | `make test-full`: PASS=14 FAIL=0 SKIP=0 (f8a043c); `make test` PASS=8 SKIP=6 (intrusive); SetCursorPos outside the verdict (D-015) |
 | 6 | README.md, ROLLBACK.md, uninstall.sh tested | **done** | real `uninstall.sh --keep-prefix`: packages, udev and modules-load identical to the reference; `install.sh --system-only` restores everything; prefix removal seen in dry-run only (keeps the user's session) |
@@ -73,7 +73,7 @@ Nothing is "done" without a test that proves it. Last update: 2026-10-30 (start)
 
 ## Limits
 - 3 screens captured at the same time: about 29 fps; DMA-BUF zero-copy not done.
-- Gamepads not done. Clipboard: text, never tried with a real client.
+- Gamepads: virtual Xbox 360 pad proven with a ViGEmClient-like probe (`src/input/tests/gamepad-e2e.sh`, 15/15); not proven with a real Parsec client; no rumble. Clipboard: text, never tried with a real client.
 - `SetCursorPos` not relayed (D-015).
 - Causes not isolated: green screen (empty 1st frame or switch to AMF), -6023 (patch 0004 probable), cursor jump to 0,31 (not reproduced).
 - Encode module tests: the x264 strict-decode case failed 2 of about 8 full runs (19 frames decoded instead of 20). Not reproduced in about 60 isolated encodes; cause unknown. This is the software fallback, not the hardware path.
