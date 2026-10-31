@@ -8,8 +8,8 @@
 set -u
 exec 8>/tmp/plh-input.lock
 flock -w 120 8 || { echo "Bail out! lock /tmp/plh-input.lock unavailable"; exit 1; }
-R=$(cd "$(dirname "$0")/../../.." && pwd); T=/tmp/plh-entrees-pad; mkdir -p "$T"
-B=$R/build
+R=$(cd "$(dirname "$0")/../../.." && pwd); T=$(mktemp -d /tmp/plh-entrees-pad.XXXXXX)
+B=${PLH_BUILD:-$R/build}
 . "$R/runtime/env.sh"
 export WINEPREFIX=${PLH_PAD_PREFIX:-/var/tmp/plh-gamepad/pfx} WINEDEBUG=-all PLH_BRIDGE_DIR=$T/br-$$
 n=0; fails=0
@@ -67,4 +67,5 @@ grep -qx REMOVED "$T/evdev3.log" && ok "pad removed when the relay is stopped" |
 kill $rp 2>/dev/null; wait $rp 2>/dev/null; "$WINESERVER" -k 2>/dev/null
 kill $bp 2>/dev/null; wait $bp 2>/dev/null
 rm -rf "$PLH_BRIDGE_DIR"
+rm -rf "$T"
 echo "1..$n"; exit $((fails != 0))

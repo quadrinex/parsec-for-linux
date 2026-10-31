@@ -50,10 +50,17 @@ static void logf_(const char *fmt, ULONG a, ULONG b, ULONG c, ULONG d)
     ZwClose(h);
 }
 
-/* Caller holds g_lock. */
+/* Caller holds g_lock. Note: targets are matched by serial only and the private device is open to any
+ * process of the prefix; acceptable because the prefix is dedicated to the host. */
 static void push(const struct plh_pad_evt *e)
 {
-    if (g_qn == EVQ) { g_qh = (g_qh + 1) % EVQ; g_qn--; }   /* drop oldest */
+    if (g_qn == EVQ) {   /* full: drop the oldest REPORT (a lost PLUG/UNPLUG would desynchronise the relay); if none, drop this one */
+        ULONG i;
+        for (i = 0; i < g_qn && g_q[(g_qh + i) % EVQ].type != PLH_PAD_EVT_REPORT; i++) ;
+        if (i == g_qn) { if (e->type == PLH_PAD_EVT_REPORT) return; i = 0; }
+        for (; i + 1 < g_qn; i++) g_q[(g_qh + i) % EVQ] = g_q[(g_qh + i + 1) % EVQ];
+        g_qn--;
+    }
     g_q[(g_qh + g_qn++) % EVQ] = *e;
 }
 
