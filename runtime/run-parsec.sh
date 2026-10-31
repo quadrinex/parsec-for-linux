@@ -83,10 +83,13 @@ if [ "$FULL" = 1 ]; then
 fi
 
 # Real monitor names for EnumDisplayDevices (patch 0005)
-"$WINE" reg delete 'HKLM\Software\Wine\PlhMonitorNames' /f >/dev/null 2>&1 || true
-"$ROOT_PLH/runtime/monitor-names.py" 2>/dev/null | while IFS=$'\t' read -r pos name; do
-    "$WINE" reg add 'HKLM\Software\Wine\PlhMonitorNames' /v "$pos" /d "$name" /f >/dev/null 2>&1 || true
-done || true
+NAMES="$("$ROOT_PLH/runtime/monitor-names.py" 2>/dev/null || true)"
+if [ -n "$NAMES" ]; then
+    "$WINE" reg delete 'HKLM\Software\Wine\PlhMonitorNames' /f >/dev/null 2>&1 </dev/null || true
+    while IFS=$'\t' read -r pos name; do
+        "$WINE" reg add 'HKLM\Software\Wine\PlhMonitorNames' /v "$pos" /d "$name" /f >/dev/null 2>&1 </dev/null || true
+    done <<<"$NAMES"
+fi
 
 LOG="$PLH_TRACES/parsec-$(date +%Y%m%d-%H%M%S).log"
 ln -sfn "$(basename "$LOG")" "$PLH_TRACES/parsec-latest.log"

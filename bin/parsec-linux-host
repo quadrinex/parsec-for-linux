@@ -11,7 +11,8 @@ LOG="$WINEPREFIX/drive_c/users/$USER/AppData/Roaming/Parsec/log.txt"
 running() { pgrep -f 'parsecd\.exe' >/dev/null; }
 
 client_connected() {
-    [ -f "$LOG" ] || return 1
+    # A crash leaves "connected." as the last line of the log.
+    running && [ -f "$LOG" ] || return 1
     # The Parsec log uses CRLF line endings.
     tr -d '\r' <"$LOG" | grep -aE ' (dis)?connected\.$' | tail -1 | grep -q ' connected\.$'
 }
@@ -34,19 +35,30 @@ wait_for_screens() {
 start() {
     if running; then echo "already running"; return 0; fi
     wait_for_screens
-    screen_layout >"$PLH_TRACES/screen-layout"
-    nohup "$0" watch >/dev/null 2>&1 </dev/null &
+    local layout
+    layout="$(screen_layout)"
+    [ -z "$layout" ] || printf '%s\n' "$layout" >"$PLH_TRACES/screen-layout"
+    pgrep -f 'parsec-linux-host[ ]watch' >/dev/null || nohup "$0" watch >/dev/null 2>&1 </dev/null &
     "$ROOT/runtime/run-parsec.sh" --full
 }
 
 # Wine and the uinput absolute device only know the layout seen at start: a screen change needs
 # a restart. It cuts a session, so it waits until no client is connected.
+screens_changed() {
+    local cur
+    cur="$(screen_layout)"
+    # Empty: the session is ending, not a layout change.
+    [ -n "$cur" ] && [ "$cur" != "$(cat "$PLH_TRACES/screen-layout" 2>/dev/null)" ]
+}
+
 watch_screens() {
     while sleep 3; do
-        [ "$(screen_layout)" = "$(cat "$PLH_TRACES/screen-layout" 2>/dev/null)" ] && continue
+        screens_changed || continue
         wait_for_screens
-        [ "$(screen_layout)" = "$(cat "$PLH_TRACES/screen-layout" 2>/dev/null)" ] && continue
         while client_connected; do sleep 3; done
+        screens_changed || continue
+        # A flapping layout must not restart in a loop.
+        [ $(($(date +%s) - $(stat -c %Y "$PLH_TRACES/screen-layout"))) -ge 60 ] || continue
         exec "$0" restart
     done
 }
@@ -78,7 +90,7 @@ status() {
             layout-watch) pat='parsec-linux-host[ ]watch' ;;
         esac
         if pgrep -f "$pat" >/dev/null; then printf '%-16s running\n' "$name"
-        else printf '%-16s stopped\n' "$name"; rc=3; fi
+        else printf '%-16s stopped\n' "$name"; [ "$name" = layout-watch ] || rc=3; fi
     done
     if client_connected; then echo "client           connected"; else echo "client           none"; fi
     return $rc
