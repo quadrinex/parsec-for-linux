@@ -153,7 +153,6 @@ static void copy_cursor(struct cap_pw *p, struct spa_buffer *b)
     struct spa_meta_cursor *mc = spa_buffer_find_meta_data(b, SPA_META_Cursor, sizeof *mc);
     if (!mc) return;
     struct cap_stream *s = p->s;
-    if (s->flags & PLH_CAP_F_CURSOR_EMBEDDED) return; /* KWin/portal draw it into the frame */
     if (!spa_meta_cursor_is_valid(mc)) {
         /* id 0: KWin has no cursor on this output (pointer elsewhere or hidden): tell the client, keep the last position */
         cap_stream_cursor(s, 0, s->last_cursor.x, s->last_cursor.y, NULL, 0, 0, 0, 0, 0);

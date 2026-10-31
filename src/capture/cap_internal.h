@@ -56,11 +56,6 @@ struct cap_stream {
     uint64_t            last_sent_ns;
     uint32_t            cursor_serial;
     struct plh_cap_cursor last_cursor;
-    /* embedded cursor for backends that cannot embed it themselves (x11, test): composited at commit */
-    uint8_t            *emb_shape; /* straight-alpha BGRA, emb_w x emb_h */
-    uint32_t            emb_w, emb_h;
-    int32_t             emb_hot_x, emb_hot_y, emb_x, emb_y;
-    int                 emb_vis;
     struct cap_stream  *next;
 };
 

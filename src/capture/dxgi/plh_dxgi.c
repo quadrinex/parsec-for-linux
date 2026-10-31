@@ -174,13 +174,6 @@ static struct plh_conn *bridge(void)
     return c;
 }
 
-/* PLH_CAPTURE_CURSOR=embedded (default: cursor drawn into the video, nothing reported through DXGI) | metadata */
-static uint32_t cursor_flags(void)
-{
-    const char *e = getenv("PLH_CAPTURE_CURSOR");
-    return (e && !strcmp(e, "metadata")) ? PLH_CAP_F_CURSOR_METADATA : PLH_CAP_F_CURSOR_EMBEDDED;
-}
-
 /* ---------- IDXGIOutputDuplication ---------- */
 static HRESULT STDMETHODCALLTYPE d_QI(IDXGIOutputDuplication *s, REFIID riid, void **o)
 {
@@ -392,7 +385,7 @@ static HRESULT do_duplicate(IDXGIOutput *out, IUnknown *device, const char *vari
     if (!d) { ID3D11Device_Release(dev); return E_OUTOFMEMORY; }
     d->iface.lpVtbl = (IDXGIOutputDuplicationVtbl *)&g_dvtbl; d->ref = 1; d->dev = dev;
     InitializeCriticalSection(&d->cs); InitializeConditionVariable(&d->cv);
-    struct plh_cap_open op = { bo[which].output_id, PLH_CAP_BACKEND_AUTO, cursor_flags(), 0, 4, PLH_FMT_BGRA8 };
+    struct plh_cap_open op = { bo[which].output_id, PLH_CAP_BACKEND_AUTO, PLH_CAP_F_CURSOR_METADATA, 0, 4, PLH_FMT_BGRA8 };
     uint32_t rl = 0;
     int r = plh_conn_request(c, PLH_MSG_CAP_OPEN, &op, sizeof op, &d->rep, sizeof d->rep, &rl, 120000);
     if (r && r != PLH_E_AGAIN) { plog("%s: CAP_OPEN error %d", variant, r); goto fail; }

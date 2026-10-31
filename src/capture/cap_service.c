@@ -65,17 +65,6 @@ void cap_stream_commit_frame(struct cap_stream *s, uint32_t slot, uint64_t pts_n
 {
     s->writing = -1;
     if (slot >= s->slot_count) return;
-    if (s->emb_vis && s->emb_shape) { /* embedded cursor mode for backends without native embedding */
-        uint8_t *img = (uint8_t *)s->shm.map + s->slot_offset + (uint64_t)slot * s->slot_size;
-        for (uint32_t y = 0; y < s->emb_h; y++)
-            for (uint32_t x = 0; x < s->emb_w; x++) {
-                int64_t dx = (int64_t)s->emb_x - s->emb_hot_x + x, dy = (int64_t)s->emb_y - s->emb_hot_y + y;
-                if (dx < 0 || dy < 0 || dx >= (int64_t)s->width || dy >= (int64_t)s->height) continue;
-                const uint8_t *sp = s->emb_shape + ((size_t)y * s->emb_w + x) * 4;
-                uint8_t *dp = img + (size_t)dy * s->stride + (size_t)dx * 4;
-                for (int k = 0; k < 3; k++) dp[k] = (uint8_t)((sp[k] * sp[3] + dp[k] * (255 - sp[3])) / 255);
-            }
-    }
     uint64_t now = plh_now_ns();
     struct plh_cap_frame f = {
         .stream_id = s->id, .slot = slot, .frame_id = PLH_FRAME_ID(s->id, ++s->frame_no),
@@ -95,20 +84,6 @@ void cap_stream_commit_frame(struct cap_stream *s, uint32_t slot, uint64_t pts_n
 void cap_stream_cursor(struct cap_stream *s, int visible, int32_t x, int32_t y, const uint8_t *bgra,
                        uint32_t w, uint32_t h, uint32_t src_stride, int32_t hot_x, int32_t hot_y)
 {
-    if (s->flags & PLH_CAP_F_CURSOR_EMBEDDED) {
-        /* no CAP_CURSOR event: keep the state, it is drawn into the frames at commit */
-        if (bgra && w && h) {
-            if (w > s->cursor_max) w = s->cursor_max;
-            if (h > s->cursor_max) h = s->cursor_max;
-            if (!s->emb_shape) s->emb_shape = malloc((size_t)s->cursor_max * s->cursor_max * 4);
-            if (s->emb_shape) {
-                for (uint32_t row = 0; row < h; row++) memcpy(s->emb_shape + (size_t)row * w * 4, bgra + (size_t)row * src_stride, (size_t)w * 4);
-                s->emb_w = w; s->emb_h = h; s->emb_hot_x = hot_x; s->emb_hot_y = hot_y;
-            }
-        }
-        s->emb_vis = visible; s->emb_x = x; s->emb_y = y;
-        return;
-    }
     struct plh_cap_cursor c = s->last_cursor;
     c.stream_id = s->id;
     c.visible = visible ? 1 : 0;
@@ -146,7 +121,6 @@ static void stream_free(struct cap_stream *s)
 {
     if (s->be && s->be->stop) s->be->stop(s);
     plh_shm_destroy(&s->shm);
-    free(s->emb_shape);
     free(s);
 }
 
@@ -185,7 +159,7 @@ static void handle_open(struct plh_client *c, const struct plh_msg_hdr *h, const
     s->id = next_stream_id++;
     s->client = c;
     s->out = *out;
-    s->flags = (req.flags & PLH_CAP_F_CURSOR_METADATA) ? PLH_CAP_F_CURSOR_METADATA : PLH_CAP_F_CURSOR_EMBEDDED; /* default (0): embedded */
+    s->flags = req.flags ? req.flags : PLH_CAP_F_CURSOR_METADATA;
     s->max_fps = req.max_fps;
     s->format = req.format ? req.format : PLH_FMT_BGRA8;
     if (s->format != PLH_FMT_BGRA8 && s->format != PLH_FMT_BGRX8) s->format = PLH_FMT_BGRA8;
