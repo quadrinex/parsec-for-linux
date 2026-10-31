@@ -134,6 +134,17 @@ static void send_layout(void)
     fflush(stdout);
 }
 
+/* Screens moved or (un)plugged: resend once the burst of changes is over. */
+#define LAYOUT_TIMER 2
+#define LAYOUT_DELAY_MS 500
+
+static LRESULT CALLBACK layout_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
+{
+    if (m == WM_DISPLAYCHANGE) { SetTimer(w, LAYOUT_TIMER, LAYOUT_DELAY_MS, NULL); return 0; }
+    if (m == WM_TIMER && wp == LAYOUT_TIMER) { KillTimer(w, LAYOUT_TIMER); send_layout(); return 0; }
+    return DefWindowProcW(w, m, wp, lp);
+}
+
 int main(int argc, char **argv)
 {
     int secs = 0;
@@ -157,6 +168,10 @@ int main(int argc, char **argv)
     hm = SetWindowsHookExW(WH_MOUSE_LL, mouse_ll, hi, 0);
     hk = SetWindowsHookExW(WH_KEYBOARD_LL, kbd_ll, hi, 0);
     if (!hm || !hk) { fprintf(stderr, "SetWindowsHookEx: %lu\n", GetLastError()); return 1; }
+    /* A hidden top-level window: message-only windows do not get WM_DISPLAYCHANGE. */
+    WNDCLASSW wc = { .lpfnWndProc = layout_proc, .hInstance = hi, .lpszClassName = L"PlhInputHookLayout" };
+    if (!RegisterClassW(&wc) || !CreateWindowExW(0, wc.lpszClassName, L"", WS_POPUP, 0, 0, 0, 0, NULL, NULL, hi, NULL))
+        fprintf(stderr, "layout window: %lu\n", GetLastError());
     printf("READY%s%s\n", dry ? " dry-run" : "", passthrough ? " passthrough" : "");
     fflush(stdout);
     if (secs > 0) SetTimer(NULL, 1, (UINT)secs * 1000, NULL);
