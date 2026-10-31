@@ -79,6 +79,9 @@ Nothing is "done" without a test that proves it. Last update: 2026-10-30 (start)
 - Encode module tests: the x264 strict-decode case failed 2 of about 8 full runs (19 frames decoded instead of 20). Not reproduced in about 60 isolated encodes; cause unknown. This is the software fallback, not the hardware path.
 - Autostart at boot (2026-10-31): Wine kept an overlapping layout (DISPLAY2 and DISPLAY3 both at 1920,0), giving the wrong screen for the mouse and a duplicate in Parsec's list. A host restart fixes it (checked with `hello.exe`). `start` now waits for a stable layout; not yet verified on a real boot.
 - Screen changes while running: the input hook resends the layout on WM_DISPLAYCHANGE (5 synthetic messages gave one resend, dry run). Not tested with a real screen change: whether Wine delivers that message or updates its own layout is unproven.
+- Cursor: Parsec fetches our DXGI shape (session counters, 18 and 25 calls), but no cursor appeared on the phone client. The phone may hide it; not tried from a PC client. Embedded-in-video mode was tried and dropped at the user's request.
+- Tray, app entry, settings window: `t07-launcher-tray`; not yet checked by eye or across a login. Wine's own blank tray item remains next to ours.
+- `make test-full` not rerun since the gamepad, cursor and watcher changes; last non-visible `make test`: PASS=10 FAIL=0 SKIP=7.
 - Patch 0003 has not been verified on a real WebSocket drop.
 - t10, t11, t12 require that no keep-above window hides the test pattern.
 - The uinput input service injects into the real session while a client is connected.

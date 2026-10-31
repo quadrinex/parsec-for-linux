@@ -72,6 +72,7 @@ From the tested machine, 1080p:
 - H.264 is limited to 4096 px wide on the tested GPU.
 - Gamepads: the mechanism is proven with a ViGEmClient-like probe, not yet with a real Parsec client. Rumble is not sent back to the client.
 - `SetCursorPos` does not reach the real desktop; Parsec only used `SendInput` in the observed sessions.
+- The cursor did not appear on a phone client; other clients are untested.
 - Clipboard is text only and has not been tried with a real client.
 - Portal and X11 capture are not validated on real desktops other than KDE.
 - Parsec's service mode, the login screen and the lock screen are not supported.
