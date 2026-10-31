@@ -1,0 +1,43 @@
+user32: report real monitor names from the registry.
+
+Wine reports "Generic Non-PnP Monitor" when it has no EDID (XWayland exposes none).
+run-parsec.sh writes the real names to the registry at each start.
+
+--- a/dlls/user32/sysparams.c
++++ b/dlls/user32/sysparams.c
+@@ -966,6 +966,23 @@
+     return TRUE;
+ }
+ 
++/* Monitor name from HKLM\\Software\\Wine\\PlhMonitorNames, keyed by "x,y" desktop position. */
++static void set_monitor_name( LPCWSTR device, DISPLAY_DEVICEW *info )
++{
++    WCHAR name[ARRAY_SIZE(info->DeviceString)], value[32];
++    DWORD size = sizeof(name) - sizeof(WCHAR), type;
++    DEVMODEW mode = {.dmSize = sizeof(mode)};
++    HKEY key;
++
++    if (!EnumDisplaySettingsExW( device, ENUM_CURRENT_SETTINGS, &mode, 0 )) return;
++    if (RegOpenKeyExW( HKEY_LOCAL_MACHINE, L"Software\\Wine\\PlhMonitorNames", 0, KEY_READ, &key )) return;
++    wsprintfW( value, L"%d,%d", mode.dmPosition.x, mode.dmPosition.y );
++    memset( name, 0, sizeof(name) );
++    if (!RegQueryValueExW( key, value, NULL, &type, (BYTE *)name, &size ) && type == REG_SZ && name[0])
++        lstrcpynW( info->DeviceString, name, ARRAY_SIZE(info->DeviceString) );
++    RegCloseKey( key );
++}
++
+ /***********************************************************************
+  *		EnumDisplayDevicesW (USER32.@)
+  */
+@@ -973,7 +990,10 @@
+ {
+     UNICODE_STRING str;
+     RtlInitUnicodeString( &str, device );
+-    return NT_SUCCESS(NtUserEnumDisplayDevices( &str, index, info, flags ));
++    if (!NT_SUCCESS(NtUserEnumDisplayDevices( &str, index, info, flags ))) return FALSE;
++    if (device && device[0] && info->cb >= offsetof(DISPLAY_DEVICEW, DeviceString) + sizeof(info->DeviceString))
++        set_monitor_name( device, info );
++    return TRUE;
+ }
+ 
+ /**********************************************************************

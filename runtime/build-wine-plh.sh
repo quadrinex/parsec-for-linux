@@ -2,7 +2,7 @@
 # Builds runtime/downloads/wine-plh-<ver>: a copy of the isolated Kron4ek wine-staging where only the
 # PE modules patched by the project (runtime/patches/wine/*.patch) are replaced.
 # Rebuilt modules: PLH_WINE_MODULES (x86_64 + i386). See runtime/patches/wine/ and docs/api-map.md.
-PLH_WINE_MODULES="ntdll wtsapi32 winhttp"
+PLH_WINE_MODULES="ntdll wtsapi32 winhttp user32"
 # Unix part (.so) rebuilt: ntdll.so (patch 0004, convert_control_headers).
 PLH_WINE_UNIX="ntdll"
 # Touches neither /usr/bin/wine nor anything outside runtime/downloads and /tmp/plh-eclaireur.

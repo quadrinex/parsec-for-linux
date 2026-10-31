@@ -34,11 +34,26 @@ wait_for_screens() {
 start() {
     if running; then echo "already running"; return 0; fi
     wait_for_screens
+    screen_layout >"$PLH_TRACES/screen-layout"
+    nohup "$0" watch >/dev/null 2>&1 </dev/null &
     "$ROOT/runtime/run-parsec.sh" --full
+}
+
+# Wine and the uinput absolute device only know the layout seen at start: a screen change needs
+# a restart. It cuts a session, so it waits until no client is connected.
+watch_screens() {
+    while sleep 3; do
+        [ "$(screen_layout)" = "$(cat "$PLH_TRACES/screen-layout" 2>/dev/null)" ] && continue
+        wait_for_screens
+        [ "$(screen_layout)" = "$(cat "$PLH_TRACES/screen-layout" 2>/dev/null)" ] && continue
+        while client_connected; do sleep 3; done
+        exec "$0" restart
+    done
 }
 
 stop() {
     # Order: the relay first (it releases keys and buttons on exit), then the daemon.
+    pkill -f 'parsec-linux-host[ ]watch' 2>/dev/null
     pkill -f 'plh-pad-relay\.exe' 2>/dev/null
     pkill -f 'plh-input-hook\.exe' 2>/dev/null
     pkill -f 'plh-clipsync\.exe' 2>/dev/null
@@ -52,7 +67,7 @@ stop() {
 
 status() {
     local rc=0 name pat
-    for name in parsecd plh-bridge plh-input-hook plh-pad-relay plh-clipd plh-clipsync; do
+    for name in parsecd plh-bridge plh-input-hook plh-pad-relay plh-clipd plh-clipsync layout-watch; do
         case $name in
             parsecd) pat='parsecd\.exe' ;;
             plh-bridge) pat='build/bridge/plh-bridge' ;;
@@ -60,6 +75,7 @@ status() {
             plh-pad-relay) pat='plh-pad-relay\.exe' ;;
             plh-clipd) pat='plh-clipd\.sh' ;;
             plh-clipsync) pat='plh-clipsync\.exe' ;;
+            layout-watch) pat='parsec-linux-host[ ]watch' ;;
         esac
         if pgrep -f "$pat" >/dev/null; then printf '%-16s running\n' "$name"
         else printf '%-16s stopped\n' "$name"; rc=3; fi
@@ -73,6 +89,7 @@ case "${1:-}" in
     stop) stop ;;
     restart) stop; sleep 2; start ;;
     status) status ;;
+    watch) watch_screens ;;
     enable)
         mkdir -p "$(dirname "$UNIT_DST")"
         sed "s|@ROOT@|$ROOT|g" "$ROOT/packaging/systemd/$UNIT" >"$UNIT_DST"

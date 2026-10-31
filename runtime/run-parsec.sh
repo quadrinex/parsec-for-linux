@@ -82,6 +82,12 @@ if [ "$FULL" = 1 ]; then
     fi
 fi
 
+# Real monitor names for EnumDisplayDevices (patch 0005)
+"$WINE" reg delete 'HKLM\Software\Wine\PlhMonitorNames' /f >/dev/null 2>&1 || true
+"$ROOT_PLH/runtime/monitor-names.py" 2>/dev/null | while IFS=$'\t' read -r pos name; do
+    "$WINE" reg add 'HKLM\Software\Wine\PlhMonitorNames' /v "$pos" /d "$name" /f >/dev/null 2>&1 || true
+done || true
+
 LOG="$PLH_TRACES/parsec-$(date +%Y%m%d-%H%M%S).log"
 ln -sfn "$(basename "$LOG")" "$PLH_TRACES/parsec-latest.log"
 echo ">> parsecd.exe ; Wine log: $LOG ; Parsec log: $WINEPREFIX/drive_c/users/$USER/AppData/Roaming/Parsec/log.txt"
