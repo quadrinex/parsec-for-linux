@@ -24,7 +24,7 @@ Reference machine (the only one tested): Arch, KDE Plasma 6.8.1 Wayland, AMD RX 
 | Windows ↔ KDE clipboard (UTF-8 text) | t41 | ✅ | src/clipboard gateway (plh-clipd + plh-clipsync), both directions |
 | Real Parsec end to end | — | user validation | outside `tests/`: the user confirmed desktop, mouse, keyboard, sound from the outside; not automatable |
 
-The intrusive tests (t10, t11, t12, t30, t40, t41) only run with `PLH_TEST_INTRUSIVE=1`.
+The intrusive tests (t10, t11, t12, t30, t31, t40, t41) only run with `PLH_TEST_INTRUSIVE=1`.
 
 ## Phase 2 — other environments (update of the final review, 2026-10-30)
 
@@ -42,7 +42,7 @@ Three statuses, no others: **tested here** (test run on the reference machine, s
 | GNOME (Wayland or X11) | **not tested** | no GNOME session available |
 | wlroots (Sway, Hyprland) | **not tested** | `wlr-randr`/`swaymsg` detection verified on sample outputs only; wlroots keyboard/mouse (wlr-virtual-pointer) not done |
 | Input through libei (RemoteDesktop portal) | **not tested** | `ei.c` compiled, outside the build; XTest not done |
-| Gamepads (uinput) | **not tested / not done** | absent |
+| Gamepads (ViGEmBus-compatible driver under Wine → relay → uinput Xbox 360 pad) | **tested here with a probe only; not tested with a real Parsec client** | t31: e2e (buttons, D-pad, sticks, triggers, removal), hostile IOCTLs refused, no pad leaked after a killed relay; the client side is our own probe (padprobe.exe), not Parsec |
 | x264 software encoding (no GPU) | **tested here** (CPU inputs, H.264) | `make -C src/encode test`; software HEVC and the DMA-BUF→x264 path not covered |
 | Intel GPU (VA-API iHD) | **not tested** | no Intel machine |
 | NVIDIA GPU (NVENC) | **not supported** | `nvEncodeAPI64.dll` not implemented, NVENC session not implemented (probe only, not tested): NVIDIA hardware host not supported |

@@ -13,12 +13,13 @@ CFLAGS := -std=c11 -O2 -Wall -Wextra
 PEFLAGS:= -std=c11 -O2 -Wall -Wextra -static -municode -DUNICODE -D_UNICODE
 
 NATIVE := basic xport_srv
-PE     := hello dda_capture sendinput_probe wasapi_loopback clipboard_probe xport_probe
+PE     := hello dda_capture sendinput_probe wasapi_loopback clipboard_probe xport_probe pad_malformed
 PELIBS_dda_capture      := -ld3d11 -ldxgi -luuid
 PELIBS_sendinput_probe  := -luser32
 PELIBS_wasapi_loopback  := -lole32 -luuid -lksuser
 PELIBS_clipboard_probe  := -luser32
 PELIBS_xport_probe      := -lws2_32
+PELIBS_pad_malformed    := -lsetupapi
 
 .PHONY: test test-full build clean
 test: build
