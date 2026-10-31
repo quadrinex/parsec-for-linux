@@ -91,6 +91,10 @@ static void send_cursor(struct cap_stream *s, struct x11_be *b)
     if (fresh) { /* XFixes: 32-bit premultiplied ARGB, stride c->width */
         const uint32_t *src = xcb_xfixes_get_cursor_image_cursor_image(c);
         for (uint32_t y = 0; y < h; y++) memcpy(px + y * w, src + (size_t)y * c->width, w * 4);
+        for (uint32_t i = 0; i < w * h; i++) { /* premultiplied -> straight alpha */
+            uint8_t *q = (uint8_t *)&px[i], a = q[3];
+            if (a && a < 255) for (int k = 0; k < 3; k++) { unsigned v = (q[k] * 255u + a / 2u) / a; q[k] = v > 255 ? 255 : (uint8_t)v; }
+        }
         b->cur_serial = c->cursor_serial; b->cur_sent = 1;
     }
     /* x,y = hotspot position relative to the output */

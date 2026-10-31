@@ -184,7 +184,7 @@ static void composite_cursor(struct st *s, uint8_t *img)
 
 int main(int argc, char **argv)
 {
-    uint32_t backend = PLH_CAP_BACKEND_AUTO, nframes = 120, quiet = 0;
+    uint32_t backend = PLH_CAP_BACKEND_AUTO, nframes = 120, quiet = 0, cflags = PLH_CAP_F_CURSOR_METADATA;
     double duration = 0;
     const char *outdir = ".", *sel = NULL;
     for (int i = 1; i < argc; i++) {
@@ -197,6 +197,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-o") && i + 1 < argc) outdir = argv[++i];
         else if (!strcmp(argv[i], "-s") && i + 1 < argc) sel = argv[++i];
         else if (!strcmp(argv[i], "-q")) quiet = 1;
+        else if (!strcmp(argv[i], "-c") && i + 1 < argc) cflags = !strcmp(argv[++i], "embedded") ? PLH_CAP_F_CURSOR_EMBEDDED : PLH_CAP_F_CURSOR_METADATA;
         else { fprintf(stderr, "usage: plh-captest [-b auto|portal|kwin|x11|test] [-n frames] [-t s] [-o dir] [-s id,..] [-q]\n"); return 2; }
     }
     is_test_backend = backend == PLH_CAP_BACKEND_TEST;
@@ -252,7 +253,7 @@ int main(int argc, char **argv)
         struct st *s = &streams[nstreams];
         memset(s, 0, sizeof *s);
         s->out = outs[i];
-        struct plh_cap_open op = { outs[i].output_id, backend, PLH_CAP_F_CURSOR_METADATA, 0, 3, PLH_FMT_BGRA8 };
+        struct plh_cap_open op = { outs[i].output_id, backend, cflags, 0, 3, PLH_FMT_BGRA8 };
         uint32_t rl;
         r = plh_conn_request(conn, PLH_MSG_CAP_OPEN, &op, sizeof op, &s->rep, sizeof s->rep, &rl, 120000);
         if (r && r != PLH_E_AGAIN) { fprintf(stderr, "CAP_OPEN %s: error %d (%s)\n", outs[i].name, r, ((struct plh_error *)&s->rep)->message); continue; }
