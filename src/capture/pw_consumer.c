@@ -177,13 +177,18 @@ static void copy_cursor(struct cap_pw *p, struct spa_buffer *b)
                     uint8_t *dp = conv + ((size_t)y * w + x) * 4;
                     dp[0] = swap ? sp[2] : sp[0]; dp[1] = sp[1]; dp[2] = swap ? sp[0] : sp[2];
                     dp[3] = noalpha ? 255 : sp[3];
+                    /* KWin cursor bitmaps are premultiplied (colour <= alpha, e.g. 226,226,226,229); the bridge contract
+                     * and DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR are straight alpha. */
+                    if (!noalpha && dp[3] && dp[3] < 255)
+                        for (int k = 0; k < 3; k++) { unsigned v = (dp[k] * 255u + dp[3] / 2) / dp[3]; dp[k] = v > 255 ? 255 : (uint8_t)v; }
                 }
             bits = conv;
             stride = w * 4;
         }
     }
-    /* position: hotspot in the stream image */
-    int32_t x = mc->position.x + mc->hotspot.x, y = mc->position.y + mc->hotspot.y;
+    /* SPA cursor meta: position is where the pointer (hotspot) is in the stream image; the bitmap's top-left is
+     * position - hotspot. The bridge event carries the hotspot position (x, y) and hot_x/hot_y. */
+    int32_t x = mc->position.x, y = mc->position.y;
     if (bits) cap_stream_cursor(s, 1, x, y, bits, w, h, stride, mc->hotspot.x, mc->hotspot.y);
     else cap_stream_cursor(s, 1, x, y, NULL, 0, 0, 0, 0, 0);
 }

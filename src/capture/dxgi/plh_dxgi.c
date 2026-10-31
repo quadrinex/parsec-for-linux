@@ -90,7 +90,7 @@ struct dup {
 #define DUP(p) ((struct dup *)(p))
 
 /* Cursor-path counters, logged every 5 s (plog) so a real Parsec session shows which cursor calls it makes. */
-static struct { volatile LONG acq, acq_mouse, acq_vis, acq_shape_sz, shape_calls, shape_ok, shape_more, ev_cursor, ev_shape, ev_hidden; ULONGLONG last; } g_cs;
+static struct { volatile LONG acq, acq_mouse, acq_vis, acq_shape_sz, shape_calls, shape_ok, shape_more, ev_cursor, ev_shape, ev_hidden, logged; ULONGLONG last; } g_cs;
 static void cursor_stats(void)
 {
     ULONGLONG now = GetTickCount64();
@@ -145,6 +145,10 @@ static void on_event(void *u, const struct plh_msg_hdr *h, const void *p)
             if (d->shape) { memcpy(d->shape, src, (size_t)c->width * c->height * 4); d->shape_known = d->shape_dirty = 1; }
             d->cur_w = c->width; d->cur_h = c->height; d->cur_hot_x = c->hot_x; d->cur_hot_y = c->hot_y;
         }
+        if (InterlockedIncrement(&g_cs.logged) <= 6)
+            plog("cursor event: visible=%d pointer=%d,%d hot=%d,%d shape=%ux%u changed=%d -> DXGI Position(top-left)=%ld,%ld Visible=%d; first px BGRA=%02x%02x%02x%02x",
+                 c->visible, c->x, c->y, c->hot_x, c->hot_y, d->cur_w, d->cur_h, c->shape_changed, d->cur_x, d->cur_y, d->cur_visible,
+                 d->shape ? d->shape[0] : 0, d->shape ? d->shape[1] : 0, d->shape ? d->shape[2] : 0, d->shape ? d->shape[3] : 0);
         d->mouse_pending = 1;
         WakeAllConditionVariable(&d->cv);
     }
