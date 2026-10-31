@@ -46,7 +46,7 @@ Three statuses, no others: **tested here** (test run on the reference machine, s
 | x264 software encoding (no GPU) | **tested here** (CPU inputs, H.264) | `make -C src/encode test`; software HEVC and the DMA-BUF→x264 path not covered |
 | Intel GPU (VA-API iHD) | **not tested** | no Intel machine |
 | NVIDIA GPU (NVENC) | **not supported** | `nvEncodeAPI64.dll` not implemented, NVENC session not implemented (probe only, not tested): NVIDIA hardware host not supported |
-| Vulkan Video | **not supported** | absent |
+| Vulkan Video | **postponed (D-018)** | absent |
 | 3 screens 1920x1080, primary ≠ leftmost (reference) | **tested here** | t03, t11, t12, t30 |
 | 1 screen, 2 screens | **not tested** | — |
 | Screens of different sizes/scales | **not tested** | — |
