@@ -89,6 +89,18 @@ struct dup {
 };
 #define DUP(p) ((struct dup *)(p))
 
+/* Cursor-path counters, logged every 5 s (plog) so a real Parsec session shows which cursor calls it makes. */
+static struct { volatile LONG acq, acq_mouse, acq_vis, acq_shape_sz, shape_calls, shape_ok, shape_more, ev_cursor, ev_shape, ev_hidden; ULONGLONG last; } g_cs;
+static void cursor_stats(void)
+{
+    ULONGLONG now = GetTickCount64();
+    if (!g_cs.last) g_cs.last = now;
+    if (now - g_cs.last < 5000 || !g_cs.acq) return;
+    g_cs.last = now;
+    plog("cursor stats: acquire=%ld with_mouse_update=%ld visible=%ld shape_size_reported=%ld | GetFramePointerShape calls=%ld ok=%ld more_data=%ld | bridge events cursor=%ld new_shape=%ld hidden=%ld",
+         g_cs.acq, g_cs.acq_mouse, g_cs.acq_vis, g_cs.acq_shape_sz, g_cs.shape_calls, g_cs.shape_ok, g_cs.shape_more, g_cs.ev_cursor, g_cs.ev_shape, g_cs.ev_hidden);
+}
+
 static void release_slot(struct dup *d, uint32_t slot)
 {
     struct plh_cap_release r = { d->rep.stream_id, slot };
@@ -124,6 +136,7 @@ static void on_event(void *u, const struct plh_msg_hdr *h, const void *p)
         WakeAllConditionVariable(&d->cv);
     } else if (h->type == PLH_MSG_CAP_CURSOR) {
         const struct plh_cap_cursor *c = p;
+        InterlockedIncrement(&g_cs.ev_cursor); if (!c->visible) InterlockedIncrement(&g_cs.ev_hidden); if (c->shape_changed) InterlockedIncrement(&g_cs.ev_shape);
         d->cur_visible = (int)c->visible; d->last_mouse = now;
         d->cur_x = c->x - c->hot_x; d->cur_y = c->y - c->hot_y;
         if (c->shape_changed && c->width && c->height && c->width <= CURMAX && c->height <= CURMAX) {
@@ -223,9 +236,11 @@ static HRESULT STDMETHODCALLTYPE d_Acquire(IDXGIOutputDuplication *s, UINT timeo
         fi->LastMouseUpdateTime = d->last_mouse;
         d->mouse_pending = 0;
     }
+    InterlockedIncrement(&g_cs.acq); if (fi->LastMouseUpdateTime.QuadPart) InterlockedIncrement(&g_cs.acq_mouse); if (d->cur_visible) InterlockedIncrement(&g_cs.acq_vis);
     fi->PointerPosition.Visible = d->cur_visible;
     fi->PointerPosition.Position = (POINT){ d->cur_x, d->cur_y };
-    if (d->shape_dirty) fi->PointerShapeBufferSize = d->cur_w * 4 * d->cur_h;
+    if (d->shape_dirty) { fi->PointerShapeBufferSize = d->cur_w * 4 * d->cur_h; InterlockedIncrement(&g_cs.acq_shape_sz); }
+    cursor_stats();
     UINT nr = d->cur_nrect ? d->cur_nrect : 1;
     fi->TotalMetadataBufferSize = fi->AccumulatedFrames ? nr * sizeof(RECT) : 0;
     d->acquired = 1;
@@ -277,12 +292,14 @@ static HRESULT STDMETHODCALLTYPE d_PtrShape(IDXGIOutputDuplication *s, UINT cap,
     if (!req || !info) return E_INVALIDARG;
     EnterCriticalSection(&d->cs);
     HRESULT hr = S_OK;
+    InterlockedIncrement(&g_cs.shape_calls);
     if (!d->shape_known) { *req = 0; memset(info, 0, sizeof *info); hr = S_OK; }
     else {
         UINT need = d->cur_w * 4 * d->cur_h;
         *req = need;
-        if (cap < need || !buf) hr = DXGI_ERROR_MORE_DATA;
+        if (cap < need || !buf) { hr = DXGI_ERROR_MORE_DATA; InterlockedIncrement(&g_cs.shape_more); }
         else {
+            InterlockedIncrement(&g_cs.shape_ok);
             memcpy(buf, d->shape, need);
             info->Type = DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR;
             info->Width = d->cur_w; info->Height = d->cur_h; info->Pitch = d->cur_w * 4;

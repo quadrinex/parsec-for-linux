@@ -153,7 +153,11 @@ static void copy_cursor(struct cap_pw *p, struct spa_buffer *b)
     struct spa_meta_cursor *mc = spa_buffer_find_meta_data(b, SPA_META_Cursor, sizeof *mc);
     if (!mc) return;
     struct cap_stream *s = p->s;
-    if (!spa_meta_cursor_is_valid(mc)) return;
+    if (!spa_meta_cursor_is_valid(mc)) {
+        /* id 0: KWin has no cursor on this output (pointer elsewhere or hidden): tell the client, keep the last position */
+        cap_stream_cursor(s, 0, s->last_cursor.x, s->last_cursor.y, NULL, 0, 0, 0, 0, 0);
+        return;
+    }
     const uint8_t *bits = NULL;
     uint32_t w = 0, h = 0, stride = 0;
     static uint8_t conv[256 * 256 * 4];
