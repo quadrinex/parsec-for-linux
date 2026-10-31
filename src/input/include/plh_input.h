@@ -56,6 +56,13 @@ int plh_uinput_evnodes(plh_input *in, char kbd[16], char rel[16], char abs_[16])
  * Waits up to timeout_ms for KWin to discover it. 0 ok, <0 -errno. (kwin_dbus.c, -lsystemd) */
 int plh_kwin_set_flat_accel(const char *evnode, int timeout_ms, char *err, size_t errlen);
 
+/* Virtual Xbox 360 gamepad on uinput (pad.c). buttons = XINPUT_GAMEPAD_* bits; sticks -32768..32767
+ * with Y up positive (XInput convention), triggers 0..255. Only changes are emitted. */
+typedef struct plh_pad plh_pad;
+plh_pad *plh_pad_create(int index, char *err, size_t errlen);
+int  plh_pad_update(plh_pad *p, unsigned buttons, int lt, int rt, int lx, int ly, int rx, int ry);
+void plh_pad_destroy(plh_pad *p);   /* removes the device */
+
 /* Generic helpers (validate and delegate to the backend). Returns 0 ok, <0 -errno. */
 int  plh_input_key_evdev(plh_input *in, int evcode, int down);
 /* Windows set 1 scancode (KEYBDINPUT.wScan); extended = KEYEVENTF_EXTENDEDKEY (E0 prefix). */

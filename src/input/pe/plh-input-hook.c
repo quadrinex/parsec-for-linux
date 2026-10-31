@@ -147,7 +147,7 @@ int main(int argc, char **argv)
     if (!dry) {
         struct plh_hello_reply hr;
         int st = plh_conn_open(&conn, PLH_CLIENT_INPUT, "plh-input-hook", &hr);
-        if (st != PLH_OK) { fprintf(stderr, "plh-input-hook: pont indisponible (%d)\n", st); return 1; }
+        if (st != PLH_OK) { fprintf(stderr, "plh-input-hook: bridge unavailable (%d)\n", st); return 1; }
         if (!(hr.services & (1u << PLH_SVC_INPUT))) { fprintf(stderr, "plh-input-hook: input service missing from the bridge\n"); return 1; }
     }
     send_layout();

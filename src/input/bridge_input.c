@@ -27,6 +27,7 @@ struct icli {
     int tx, ty;                   /* KWin = Windows + T, for this client */
     unsigned char keys[KEY_CNT / 8 + 1];
     unsigned char btns;
+    plh_pad *pads[4];             /* virtual gamepads owned by this client */
 };
 
 static struct icli *cli_state(struct plh_client *c)
@@ -49,6 +50,11 @@ static void release_all(struct icli *s)
         if (s->btns & (1u << b)) plh_input_button(in, (enum plh_button)b, 0);
     memset(s->keys, 0, sizeof s->keys);
     s->btns = 0;
+}
+
+static void drop_pads(struct icli *s)
+{
+    for (int i = 0; i < 4; i++) { plh_pad_destroy(s->pads[i]); s->pads[i] = NULL; }
 }
 
 static int apply(struct icli *s, const struct plh_input_ev *e)
@@ -146,6 +152,22 @@ static void handle(struct plh_client *c, const struct plh_msg_hdr *h, const void
         if (h->seq) plh_reply(c, h, &r, sizeof r);
         return;
     }
+    case PLH_MSG_INPUT_GAMEPAD: {
+        const struct plh_input_gamepad *g = p;
+        if (h->size < sizeof *g || g->index >= 4) { if (h->seq) plh_reply_error(c, h, PLH_E_PROTO, "size"); return; }
+        if (!g->connected) { plh_pad_destroy(s->pads[g->index]); s->pads[g->index] = NULL; }
+        else {
+            if (!s->pads[g->index]) {
+                char err[128];
+                s->pads[g->index] = plh_pad_create((int)g->index, err, sizeof err);
+                if (!s->pads[g->index]) { PLH_ERR(MOD, "gamepad %u: %s", g->index, err); if (h->seq) plh_reply_error(c, h, PLH_E_IO, "gamepad"); return; }
+                PLH_INFO(MOD, "client %u: virtual gamepad %u plugged", plh_client_id(c), g->index);
+            }
+            plh_pad_update(s->pads[g->index], g->buttons, g->left_trigger, g->right_trigger, g->lx, g->ly, g->rx, g->ry);
+        }
+        if (h->seq) { struct plh_input_status st = { PLH_OK, 1 }; plh_reply(c, h, &st, sizeof st); }
+        return;
+    }
     case PLH_MSG_INPUT_RELEASE_ALL: {
         release_all(s);
         struct plh_input_status st = { PLH_OK, 0 };
@@ -161,6 +183,7 @@ static void client_gone(struct plh_client *c)
     struct icli *s = plh_client_get_data(c, PLH_SVC_INPUT);
     if (!s) return;
     release_all(s);
+    drop_pads(s);
     free(s);
     plh_client_set_data(c, PLH_SVC_INPUT, NULL);
 }

@@ -3,7 +3,7 @@ B      ?= ../../build/input
 CC     ?= cc
 CFLAGS ?= -O2 -g
 CFLAGS += -std=c11 -Wall -Wextra -Iinclude
-LIBSRC := input.c scancode.c uinput.c kwin_dbus.c layout.c
+LIBSRC := pad.c input.c scancode.c uinput.c kwin_dbus.c layout.c
 LDLIBS += -lsystemd
 LIBOBJ := $(LIBSRC:%.c=$(B)/%.o)
 
@@ -12,11 +12,21 @@ PECFLAGS := -O2 -std=c11 -Wall -Wextra
 CLIENT := ../bridge/client/plh_client.c
 PEHDRS := $(wildcard ../bridge/proto/*.h ../bridge/client/*.h)
 
-all: $(B)/test-layout $(B)/libplhinput.a $(B)/plh-input-ctl $(B)/test-scancode $(B)/test-uinput-seq $(B)/pe/plh-input-hook.exe $(B)/pe/injectprobe.exe
+all: $(B)/pe/plh-pad-relay.exe $(B)/pe/plh-vigem.sys $(B)/pe/padprobe.exe $(B)/test-layout $(B)/pad-evdev-dump $(B)/libplhinput.a $(B)/plh-input-ctl $(B)/test-scancode $(B)/test-uinput-seq $(B)/pe/plh-input-hook.exe $(B)/pe/injectprobe.exe
 
 $(B)/pe/plh-input-hook.exe: pe/plh-input-hook.c $(CLIENT) $(PEHDRS)
 	@mkdir -p $(B)/pe
 	$(MINGW) $(PECFLAGS) -o $@ pe/plh-input-hook.c $(CLIENT) -lws2_32
+$(B)/pe/plh-pad-relay.exe: gamepad/plh-pad-relay.c gamepad/plh_pad_drv.h $(CLIENT) $(PEHDRS)
+	@mkdir -p $(B)/pe
+	$(MINGW) $(PECFLAGS) -Igamepad -o $@ gamepad/plh-pad-relay.c $(CLIENT) -lws2_32 -ladvapi32
+$(B)/pe/plh-vigem.sys: gamepad/plh-vigem.c gamepad/plh_pad_drv.h
+	@mkdir -p $(B)/pe
+	$(MINGW) $(PECFLAGS) -I/usr/x86_64-w64-mingw32/include/ddk -Igamepad -nostartfiles -nostdlib -shared \
+	  -Wl,--subsystem,native -Wl,--entry,DriverEntry -o $@ gamepad/plh-vigem.c -lntoskrnl
+$(B)/pe/padprobe.exe: gamepad/padprobe.c gamepad/plh_pad_drv.h
+	@mkdir -p $(B)/pe
+	$(MINGW) $(PECFLAGS) -Igamepad -o $@ gamepad/padprobe.c -lsetupapi
 $(B)/pe/injectprobe.exe: pe/injectprobe.c
 	@mkdir -p $(B)/pe
 	$(MINGW) $(PECFLAGS) -o $@ $<
@@ -34,6 +44,8 @@ $(B)/test-scancode: $(B)/tools/test-scancode.o $(B)/libplhinput.a
 	$(CC) -o $@ $^ $(LDLIBS)
 $(B)/test-uinput-seq: $(B)/tools/test-uinput-seq.o $(B)/libplhinput.a
 	$(CC) -o $@ $^ $(LDLIBS)
+$(B)/pad-evdev-dump: $(B)/tools/pad-evdev-dump.o
+	$(CC) -o $@ $^
 $(B):
 	mkdir -p $(B)
 
