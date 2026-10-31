@@ -82,6 +82,7 @@ From the tested machine, 1080p:
 | Clicks and keys have no effect on the desktop | Disconnect the client; check `plh-input-hook` in `status` and `plh-input-hook.log` in the traces directory |
 | Local clicks and keys are blocked while the cursor moves | Run `bin/parsec-linux-host stop`: a Wine window may have kept the grab |
 | With KDE Connect "Share input devices", input goes to the phone | Bring the pointer back from the phone, or disable that plugin |
+| Mouse on the wrong screen, two identical screens in Parsec's list | `bin/parsec-linux-host restart`: Wine kept an incomplete screen layout |
 | `-6023` when connecting from outside the LAN | Try on the LAN first to isolate the problem. Check that you use the patched `wine-plh` build (`runtime/build-wine-plh.sh`) |
 
 Logs: `runtime/traces/` and `AppData/Roaming/Parsec/log.txt` in the prefix. The prefix is `runtime/prefix`, or `~/.local/share/parsec-for-linux` when the repository is not writable.
