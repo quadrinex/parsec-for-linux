@@ -89,7 +89,7 @@ Nothing is "done" without a test that proves it. Last update: 2026-10-30 (start)
 ## Phase 2: actual state
 - Done and tested here: Wayland/KDE detection, encoder selection, x264 software encoding, KWin geometry, `install.sh` on Arch, PKGBUILD (`makepkg` succeeded, package not installed).
 - Written, not tested in real conditions: GNOME/wlroots portal, X11 (Xvfb only), wlr-randr/swaymsg/xrandr parsers (sample outputs), libei, `install.sh` apt/dnf.
-- Not done: **Vulkan Video** (testable here), NVENC session (no NVIDIA GPU, no NVIDIA hardware encoding), wlr-virtual-pointer, XTest. Detail: `docs/compat-matrix.md`.
+- Not done: **Vulkan Video** (postponed by the user, D-018), NVENC session (no NVIDIA GPU, no NVIDIA hardware encoding), wlr-virtual-pointer, XTest. Detail: `docs/compat-matrix.md`.
 - `plh-bridge` depends on libxcb even under Wayland.
 
 ## Checklist for you
@@ -98,7 +98,6 @@ Nothing is "done" without a test that proves it. Last update: 2026-10-30 (start)
 - [ ] Set the repository URL in `packaging/arch/PKGBUILD` (`CHANGEME`).
 - [ ] If you want startup with the session: `bin/parsec-linux-host enable`.
 - [ ] Disabling AMF in the interface removes `amfrt64.dll` and goes back to the software encoder: to be checked (green screen possible).
-- [ ] Decide on Vulkan Video: to do, or to drop.
 - [ ] Connect once with a real client on the English build.
 
 Commit hashes in this file refer to the development history, which is not published.
