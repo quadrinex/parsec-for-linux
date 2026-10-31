@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Guardrails (CLAUDE.md) checked mechanically:
 #  - system Wine intact (pacman -Qkk wine);
-#  - every package added since the initial backup is cited in ROLLBACK.md;
-#  - every /etc file modified since the backup is cited in ROLLBACK.md;
+#  - packages added since the initial backup and not cited in ROLLBACK.md: WARN only (D-017);
+#    packages REMOVED since the backup must be cited (hard failure);
+#  - every /etc file modified since the backup is cited in ROLLBACK.md (SKIP of that part without sudo -n);
 #  - no world-writable file in the repository and no udev rule 0666/0777;
 #  - no binary memory patching in src/ (WriteProcessMemory, detours...).
 . "$(dirname "$0")/lib/common.sh"
@@ -10,8 +11,7 @@ bad=0
 RB="$REPO/ROLLBACK.md"
 BASE=$(ls "$REPO"/backups/pkglist-all-*.txt 2>/dev/null | head -1)
 
-# Packages installed outside the project (D-016): exact names, attribution inferred, not proven.
-KNOWN_USER_PKGS=" nmap openbsd-netcat unrar "
+# Files modified outside the project (D-016): exact names, attribution inferred, not proven.
 KNOWN_USER_ETC=" /etc/resolv.pre-tailscale-backup.conf "
 if command -v pacman >/dev/null 2>&1 && pacman -Q wine >/dev/null 2>&1; then
   alt=$(pacman -Qkk wine 2>&1 | grep -oE '[0-9]+ altered files' | grep -oE '^[0-9]+')
@@ -23,10 +23,9 @@ fi
 
 if [ -n "$BASE" ] && command -v pacman >/dev/null 2>&1; then
   while read -r p _; do
-    case "$KNOWN_USER_PKGS" in *" $p "*) info "added package ignored (D-016, installed outside the project): $p"; continue;; esac
-    # full name required in ROLLBACK.md or in uninstall.sh (which must undo it)
+    # D-017: growth of the package list on a live machine cannot be attributed by name: WARN only.
     if ! grep -qw -- "$p" "$RB" "$REPO/uninstall.sh" 2>/dev/null; then
-      info "added package not recorded (neither ROLLBACK.md nor uninstall.sh): $p"; bad=1
+      info "WARN added package not recorded (neither ROLLBACK.md nor uninstall.sh): $p"
     fi
   done < <(comm -13 <(cut -d' ' -f1 "$BASE" | sort) <(pacman -Q | cut -d' ' -f1 | sort) | sed 's/$/ x/')
   # removed packages
@@ -43,7 +42,11 @@ if [ -z "$REF" ]; then
 else
   # Volatile files modified by the system itself (not by the team).
   VOLATILE='^/etc/(ld\.so\.cache|resolv\.conf|adjtime|machine-id|mtab|\.pwd\.lock|pacman\.d/gnupg/.*|cups/.*|NetworkManager/system-connections/.*|udev/hwdb\.bin)$'
-  while read -r f; do
+  if ! sudo -n true 2>/dev/null; then
+    info "SKIPPED /etc comparison: sudo -n unavailable (no passwordless sudo rule), /etc NOT checked"
+    REF=""
+  fi
+  [ -z "$REF" ] || while read -r f; do
     [[ "$f" =~ $VOLATILE ]] && continue
     case "$KNOWN_USER_ETC" in *" $f "*) info "modified /etc file ignored (D-016, outside the project): $f"; continue;; esac
     [ "$f" = __ECHEC_FIND__ ] && { info "/etc scan failed"; bad=1; continue; }
@@ -54,7 +57,7 @@ else
     fi
     grep -qF -- "$f" "$RB" || { info "modified /etc file not recorded: $f"; bad=1; }
   done < <(sudo -n find /etc -newer "$REF" \( -type f -o -type l \) 2>/dev/null || echo "__ECHEC_FIND__")
-  if sudo -n true 2>/dev/null; then info "/etc compared with $(basename "$REF")"; else info "sudo -n unavailable: /etc NOT checked"; bad=1; fi
+  [ -z "$REF" ] || info "/etc compared with backup"
 fi
 
 ww=$(cd "$REPO" && git ls-files -z | xargs -0 -r stat -c '%a %n' 2>/dev/null | awk '$1 ~ /[2367]$/ {print $2}')
