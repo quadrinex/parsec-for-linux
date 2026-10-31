@@ -82,6 +82,7 @@ Nothing is "done" without a test that proves it. Last update: 2026-10-30 (start)
 - Cursor: Parsec fetches our DXGI shape (session counters, 18 and 25 calls), but no cursor appeared on the phone client. The phone may hide it; not tried from a PC client. Embedded-in-video mode was tried and dropped at the user's request.
 - Tray, app entry, settings window: `t07-launcher-tray`; not yet checked by eye or across a login. Wine's own blank tray item remains next to ours.
 - `make test-full` not rerun since the gamepad, cursor and watcher changes; last non-visible `make test`: PASS=10 FAIL=0 SKIP=7.
+- `make test-full` on 2026-10-31 (late, after the gamepad, cursor, watcher and tray changes): PASS=13 FAIL=3 SKIP=1, not investigated yet. t10: spectacle produced no capture. t12: the pattern was not read at the corners (desktop colours). t31: no evdev capture, relay and padprobe `Killed`. t11 skipped: a client seemed connected. **`DONE` not created: criterion 5 is not currently proven on HEAD.**
 - Patch 0003 has not been verified on a real WebSocket drop.
 - t10, t11, t12 require that no keep-above window hides the test pattern.
 - The uinput input service injects into the real session while a client is connected.
