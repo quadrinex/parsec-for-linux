@@ -82,6 +82,9 @@ if [ "$FULL" = 1 ]; then
     fi
 fi
 
+# One tray icon: bin/parsec-tray replaces Wine's blank item (read by explorer.exe at its next start).
+"$WINE" reg add 'HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer' /v NoTrayItemsDisplay /t REG_DWORD /d 1 /f >/dev/null 2>&1 </dev/null || true
+
 # Real monitor names for EnumDisplayDevices (patch 0005)
 NAMES="$("$ROOT_PLH/runtime/monitor-names.py" 2>/dev/null || true)"
 if [ -n "$NAMES" ]; then

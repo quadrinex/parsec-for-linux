@@ -78,6 +78,12 @@ def overall(comp, client, enabled):
 
 
 def base_pixmap(size=64):
+    # The theme lookup misses the user's own icon directory when started from a service.
+    data_home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    for path in (f"{data_home}/icons/hicolor/256x256/apps/{ICON_NAME}.png",
+                 f"/usr/share/icons/hicolor/256x256/apps/{ICON_NAME}.png"):
+        if os.path.exists(path):
+            return QPixmap(path).scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
     icon = QIcon.fromTheme(ICON_NAME)
     if not icon.isNull():
         return icon.pixmap(size, size)
