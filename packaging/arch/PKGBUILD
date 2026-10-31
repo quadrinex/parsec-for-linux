@@ -1,0 +1,36 @@
+# Local package: installs the repository under /opt. Parsec is not redistributed:
+# runtime/setup-prefix.sh downloads it on the user's machine, with the prefix
+# in ~/.local/share/parsec-for-linux (see runtime/env.sh).
+pkgname=parsec-for-linux-git
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Parsec host on Linux: the official Windows app under Wine plus a compatibility layer"
+arch=('x86_64')
+url="https://github.com/CHANGEME/parsec-for-linux"
+license=('MIT' 'LGPL-2.1-or-later')
+depends=('libva' 'libei' 'pipewire' 'wayland' 'systemd-libs' 'libxcb' 'lib32-vulkan-icd-loader' 'lib32-mesa' 'lib32-libpipewire' 'curl' 'python')
+makedepends=('git' 'gcc' 'make' 'mingw-w64-gcc' 'x264')
+optdepends=('pyside6: configuration UI'
+            'x264: fallback software encoding')
+source=("parsec-for-linux::git+file://${startdir}/../..")
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/parsec-for-linux"
+  make
+}
+
+package() {
+  cd "$srcdir/parsec-for-linux"
+  install -d "$pkgdir/opt/parsec-for-linux"
+  cp -a bin build docs packaging runtime src tests Makefile README.md install.sh uninstall.sh \
+    "$pkgdir/opt/parsec-for-linux/"
+  install -Dm644 src/input/udev/70-parsec-linux-host-uinput.rules \
+    "$pkgdir/usr/lib/udev/rules.d/70-parsec-linux-host-uinput.rules"
+  install -Dm644 src/input/udev/70-parsec-linux-host-uinput.conf \
+    "$pkgdir/usr/lib/modules-load.d/70-parsec-linux-host-uinput.conf"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 NOTICE.md "$pkgdir/usr/share/licenses/$pkgname/NOTICE.md"
+  install -d "$pkgdir/usr/bin"
+  ln -s /opt/parsec-for-linux/bin/parsec-linux-host "$pkgdir/usr/bin/parsec-linux-host"
+}

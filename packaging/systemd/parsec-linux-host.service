@@ -1,0 +1,13 @@
+[Unit]
+Description=Parsec host under Wine
+After=graphical-session.target pipewire.service
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=@ROOT@/bin/parsec-linux-host start
+ExecStop=@ROOT@/bin/parsec-linux-host stop
+
+[Install]
+WantedBy=graphical-session.target

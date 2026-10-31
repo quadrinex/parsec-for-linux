@@ -1,0 +1,6 @@
+-std=c11
+-Iinclude
+-I../bridge
+-I/usr/include/libdrm
+-Wall
+-Wextra

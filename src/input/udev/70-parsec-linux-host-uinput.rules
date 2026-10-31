@@ -1,0 +1,3 @@
+# parsec-for-linux : access to /dev/uinput for the active session user (uaccess ACL, no chmod).
+# Installed in /etc/udev/rules.d/; undone by uninstall.sh.
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"

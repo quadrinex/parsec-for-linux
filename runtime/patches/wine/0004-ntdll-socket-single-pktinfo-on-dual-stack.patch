@@ -1,0 +1,32 @@
+ntdll: do not report IP_PKTINFO next to IPV6_PKTINFO on dual-stack sockets
+
+An IPv4 datagram on an AF_INET6 socket with both options enabled produced two control
+messages; applications sized for the single Windows IPV6_PKTINFO got WSAEMSGSIZE and the
+datagram was lost (Parsec: no reply to any IPv4 peer, error -6023).
+---
+--- a/dlls/ntdll/unix/socket.c
++++ b/dlls/ntdll/unix/socket.c
+@@ -393,6 +393,15 @@
+     WSACMSGHDR *cmsg_win = (WSACMSGHDR *)control->buf, *ptr;
+     ULONG ctlsize = control->len;
+     struct cmsghdr *cmsg_unix;
++    int have_ipv6_pktinfo = 0;
++
++    /* An IPv4 datagram received on a dual-stack AF_INET6 socket carries both IP_PKTINFO and
++     * IPV6_PKTINFO on Linux when both are enabled; Windows only reports the IPv6 one (with a
++     * v4-mapped address), and applications size their control buffer for that. */
++#if defined(IPV6_PKTINFO)
++    for (cmsg_unix = CMSG_FIRSTHDR(hdr); cmsg_unix != NULL; cmsg_unix = CMSG_NXTHDR(hdr, cmsg_unix))
++        if (cmsg_unix->cmsg_level == IPPROTO_IPV6 && cmsg_unix->cmsg_type == IPV6_PKTINFO) have_ipv6_pktinfo = 1;
++#endif
+ 
+     ptr = cmsg_win;
+     for (cmsg_unix = CMSG_FIRSTHDR(hdr); cmsg_unix != NULL; cmsg_unix = CMSG_NXTHDR(hdr, cmsg_unix))
+@@ -408,6 +417,7 @@
+                         const struct in_pktinfo *data_unix = (struct in_pktinfo *)CMSG_DATA(cmsg_unix);
+                         struct WS_in_pktinfo data_win;
+ 
++                        if (have_ipv6_pktinfo) break;
+                         memcpy( &data_win.ipi_addr, &data_unix->ipi_addr.s_addr, 4 ); /* 4 bytes = 32 address bits */
+                         data_win.ipi_ifindex = data_unix->ipi_ifindex;
+                         ptr = fill_control_message( WS_IPPROTO_IP, WS_IP_PKTINFO, ptr, &ctlsize,

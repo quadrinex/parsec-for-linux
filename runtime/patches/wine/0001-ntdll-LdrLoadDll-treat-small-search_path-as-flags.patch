@@ -1,0 +1,15 @@
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -3577,7 +3577,11 @@
+     WCHAR *path_name = NULL, *dummy;
+ 
+     if (load_flags) flags = *load_flags;
+-    if (!search_path || ((ULONG_PTR)search_path & 1))
++    /* plh: a search_path below 0x10000 can never be a valid string pointer (the first 64K of
++     * the address space are never mapped on Windows); some applications pass LOAD_LIBRARY_SEARCH_*
++     * flag values there without the LDR_PATH_IS_FLAGS (1) bit. Treat them as flags instead of
++     * dereferencing them. */
++    if (!search_path || ((ULONG_PTR)search_path & 1) || !((ULONG_PTR)search_path >> 16))
+     {
+         if ((nts = LdrGetDllPath( libname->Buffer, (ULONG_PTR)search_path & load_library_search_flags, &path_name, &dummy )))
+             return nts;

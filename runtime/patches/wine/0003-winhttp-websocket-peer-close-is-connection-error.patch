@@ -1,0 +1,19 @@
+winhttp: report ERROR_WINHTTP_CONNECTION_ERROR when the WebSocket peer drops the TCP connection
+
+Without a close frame, receive_bytes() reported ERROR_WINHTTP_INVALID_SERVER_RESPONSE (0x2F78)
+and every later WinHttpWebSocketReceive failed the same way (Parsec/libmatoya: endless
+"ws_async: WebSocket error: dwResult:0, dwError:0x2F78"). Windows reports 12030.
+---
+--- a/dlls/winhttp/socket.c
++++ b/dlls/winhttp/socket.c
+@@ -584,7 +584,9 @@
+         ptr += received;
+     }
+     *ret_len = size;
+-    if (size != len && (read_full_buffer || !size)) return ERROR_WINHTTP_INVALID_SERVER_RESPONSE;
++    /* The peer closed the TCP connection without a WebSocket close frame: Windows reports a
++     * connection error, not a malformed server response. */
++    if (size != len && (read_full_buffer || !size)) return ERROR_WINHTTP_CONNECTION_ERROR;
+     return ERROR_SUCCESS;
+ }
+ 

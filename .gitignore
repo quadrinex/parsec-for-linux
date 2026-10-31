@@ -1,0 +1,14 @@
+backups/
+vendor/*/build/
+build/
+*.o
+*.exe
+*.dll
+*.so
+runtime/prefix/
+runtime/downloads/
+runtime/traces/
+runtime/config.env
+__pycache__/
+.claude/
+DONE

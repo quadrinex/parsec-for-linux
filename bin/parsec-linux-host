@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Starts, stops and describes the Parsec host under Wine.
+# Usage : parsec-linux-host start|stop|restart|status|enable|disable|config|ui
+set -u
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+UNIT=parsec-linux-host.service
+UNIT_DST="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$UNIT"
+. "$ROOT/runtime/env.sh"
+LOG="$WINEPREFIX/drive_c/users/$USER/AppData/Roaming/Parsec/log.txt"
+
+running() { pgrep -f 'parsecd\.exe' >/dev/null; }
+
+client_connected() {
+    [ -f "$LOG" ] || return 1
+    # The Parsec log uses CRLF line endings.
+    tr -d '\r' <"$LOG" | grep -aE ' (dis)?connected\.$' | tail -1 | grep -q ' connected\.$'
+}
+
+start() {
+    if running; then echo "already running"; return 0; fi
+    "$ROOT/runtime/run-parsec.sh" --full
+}
+
+stop() {
+    # Order: the relay first (it releases keys and buttons on exit), then the daemon.
+    pkill -f 'plh-input-hook\.exe' 2>/dev/null
+    pkill -f 'plh-clipsync\.exe' 2>/dev/null
+    pkill -f 'plh-clipd\.sh' 2>/dev/null
+    if [ -d "$WINEPREFIX" ]; then
+        "$WINESERVER" -k 2>/dev/null
+    fi
+    pkill -x plh-bridge 2>/dev/null
+    return 0
+}
+
+status() {
+    local rc=0 name pat
+    for name in parsecd plh-bridge plh-input-hook plh-clipd plh-clipsync; do
+        case $name in
+            parsecd) pat='parsecd\.exe' ;;
+            plh-bridge) pat='build/bridge/plh-bridge' ;;
+            plh-input-hook) pat='plh-input-hook\.exe' ;;
+            plh-clipd) pat='plh-clipd\.sh' ;;
+            plh-clipsync) pat='plh-clipsync\.exe' ;;
+        esac
+        if pgrep -f "$pat" >/dev/null; then printf '%-16s running\n' "$name"
+        else printf '%-16s stopped\n' "$name"; rc=3; fi
+    done
+    if client_connected; then echo "client           connected"; else echo "client           none"; fi
+    return $rc
+}
+
+case "${1:-}" in
+    start) start ;;
+    stop) stop ;;
+    restart) stop; sleep 2; start ;;
+    status) status ;;
+    enable)
+        mkdir -p "$(dirname "$UNIT_DST")"
+        sed "s|@ROOT@|$ROOT|g" "$ROOT/packaging/systemd/$UNIT" >"$UNIT_DST"
+        systemctl --user daemon-reload
+        systemctl --user enable "$UNIT"
+        ;;
+    disable)
+        systemctl --user disable "$UNIT" 2>/dev/null
+        rm -f "$UNIT_DST"
+        systemctl --user daemon-reload
+        ;;
+    config|ui|gui)
+        exec "$ROOT/bin/parsec-config-ui" "${@:2}"
+        ;;
+    *) echo "usage : $0 start|stop|restart|status|enable|disable|config" >&2; exit 2 ;;
+esac
