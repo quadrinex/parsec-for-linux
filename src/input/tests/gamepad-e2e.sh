@@ -25,8 +25,8 @@ done
 mkdir -p "$PLH_BRIDGE_DIR"; chmod 700 "$PLH_BRIDGE_DIR"
 PLH_INPUT_BACKEND=uinput "$B/bridge/plh-bridge" --runtime-dir "$PLH_BRIDGE_DIR" --capture-backend test > "$T/bridge.log" 2>&1 & bp=$!
 for _ in $(seq 50); do [ -e "$PLH_BRIDGE_DIR/port" ] && break; sleep 0.1; done; sleep 1
-timeout 90 "$WINE" "$B/input/pe/plh-pad-relay.exe" --install "$B/input/pe/plh-vigem.sys" --seconds 40 -v > "$T/relay.log" 2>&1 & rp=$!
-for _ in $(seq 150); do grep -q READY "$T/relay.log" 2>/dev/null && break; sleep 0.2; done
+timeout 180 "$WINE" "$B/input/pe/plh-pad-relay.exe" --install "$B/input/pe/plh-vigem.sys" --seconds 120 -v > "$T/relay.log" 2>&1 & rp=$!
+for _ in $(seq 450); do grep -q READY "$T/relay.log" 2>/dev/null && break; sleep 0.2; done
 grep -q READY "$T/relay.log" && ok "driver installed, bus interface published (relay READY)" || { nok "relay did not become READY"; cat "$T/relay.log"; }
 
 "$B/input/pad-evdev-dump" 20 30 > "$T/evdev.log" 2>&1 & dp=$!

@@ -78,9 +78,24 @@ static int install_driver(const char *src)
                            SERVICE_ERROR_NORMAL, dst, NULL, NULL, NULL, NULL, NULL);
     (void)bin;
     int ok = 0;
+    if (s) {   /* start through a fresh handle: starting on the CreateService handle fails (1055) in a fresh prefix */
+        CloseServiceHandle(s);
+        Sleep(500);
+        s = OpenServiceW(m, SVC_NAME, SERVICE_ALL_ACCESS);
+    }
     if (s) {
-        ok = StartServiceW(s, 0, NULL) || GetLastError() == ERROR_SERVICE_ALREADY_RUNNING;
-        if (!ok) fprintf(stderr, "StartService: %lu\n", GetLastError());
+        /* in a fresh prefix services.exe keeps its database locked (1055) for ~40 s after the first start */
+        for (int t = 0; t < 60 && !ok; t++) {
+            SERVICE_STATUS ss;
+            ok = StartServiceW(s, 0, NULL) || GetLastError() == ERROR_SERVICE_ALREADY_RUNNING ||
+                 (QueryServiceStatus(s, &ss) && ss.dwCurrentState == SERVICE_RUNNING);
+            if (!ok) {
+                DWORD e = GetLastError();
+                if (e != ERROR_SERVICE_DATABASE_LOCKED && e != ERROR_SERVICE_REQUEST_TIMEOUT) { fprintf(stderr, "StartService: %lu\n", e); break; }
+                if (t == 0) fprintf(stderr, "StartService: %lu (service database busy, waiting)\n", e);
+                Sleep(2000);
+            }
+        }
         CloseServiceHandle(s);
     } else fprintf(stderr, "CreateService: %lu\n", GetLastError());
     CloseServiceHandle(m);

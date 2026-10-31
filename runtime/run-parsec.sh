@@ -78,12 +78,7 @@ if [ "$FULL" = 1 ]; then
         # gamepads: ViGEmBus-compatible driver in the prefix + relay to plh-bridge; the bus interface
         # must be published before parsecd starts (its keys are volatile, redone at every start)
         WINEDEBUG=-all nohup "$WINE" "$ROOT_PLH/build/input/pe/plh-pad-relay.exe" --install "$ROOT_PLH/build/input/pe/plh-vigem.sys" >"$PLH_TRACES/plh-pad-relay.log" 2>&1 &
-        for _ in $(seq 100); do grep -q READY "$PLH_TRACES/plh-pad-relay.log" 2>/dev/null && break; sleep 0.2; done
-    fi
-    if [ "${PLH_ENABLE_INPUT:-1}" = 1 ] && [ "${PLH_ENABLE_GAMEPAD:-1}" = 1 ] && [ -f "$ROOT_PLH/build/input/pe/plh-pad-relay.exe" ]; then
-        # ViGEm-compatible driver and relay: registered on each start (volatile keys), before parsecd
-        WINEDEBUG=-all nohup "$WINE" "$ROOT_PLH/build/input/pe/plh-pad-relay.exe" --install "$ROOT_PLH/build/input/pe/plh-vigem.sys" >"$PLH_TRACES/plh-pad-relay.log" 2>&1 &
-        for _ in $(seq 100); do grep -q READY "$PLH_TRACES/plh-pad-relay.log" 2>/dev/null && break; sleep 0.2; done
+        for _ in $(seq 300); do grep -q READY "$PLH_TRACES/plh-pad-relay.log" 2>/dev/null && break; sleep 0.2; done
     fi
 fi
 
