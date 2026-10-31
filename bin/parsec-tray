@@ -1,0 +1,360 @@
+#!/usr/bin/env python3
+"""Tray icon and settings window of the Parsec host.
+
+Usage: parsec-tray [--settings]
+
+One instance per session: a second call hands its request (open the settings) to the running one
+and exits. The tray only reads the host state through `parsec-linux-host status` and starts
+`parsec-linux-host` commands; the host runs without it. Needs PySide6.
+"""
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "runtime"))
+import plhconfig  # noqa: E402
+
+try:
+    from PySide6.QtCore import QPointF, QProcess, QTimer, Qt, QUrl
+    from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPen, QPixmap
+    from PySide6.QtNetwork import QLocalServer, QLocalSocket
+    from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout,
+                                   QLabel, QMenu, QMessageBox, QPushButton, QSystemTrayIcon, QVBoxLayout)
+except ImportError:
+    sys.stderr.write("parsec-tray needs PySide6 (pacman -S pyside6). The host works without it.\n")
+    sys.exit(1)
+
+HOST = str(ROOT / "bin" / "parsec-linux-host")
+ICON_NAME = "parsec-for-linux"
+COMPONENTS = [
+    ("parsecd", "Parsec"),
+    ("plh-bridge", "Screen and audio bridge"),
+    ("plh-input-hook", "Input relay"),
+    ("plh-pad-relay", "Gamepad relay"),
+    ("plh-clipd", "Clipboard (Linux side)"),
+    ("plh-clipsync", "Clipboard (Windows side)"),
+]
+# Components that are only expected when the matching option is on.
+OPTIONAL = {
+    "plh-input-hook": "PLH_ENABLE_INPUT",
+    "plh-pad-relay": "PLH_ENABLE_GAMEPAD",
+    "plh-clipd": "PLH_ENABLE_CLIPBOARD",
+    "plh-clipsync": "PLH_ENABLE_CLIPBOARD",
+}
+COLORS = {"stopped": "#8a8a8a", "degraded": "#f67400", "ready": "#3daee9", "connected": "#27ae60", "unknown": "#8a8a8a"}
+TEXT = {
+    "stopped": "host stopped",
+    "degraded": "host running, some components stopped",
+    "ready": "host running, no client",
+    "connected": "client connected",
+    "unknown": "checking...",
+}
+
+
+def parse_status(text):
+    """`parsec-linux-host status` output -> ({component: running?}, client_connected?)."""
+    comp, client = {}, False
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        if parts[0] == "client":
+            client = parts[1] == "connected"
+        else:
+            comp[parts[0]] = parts[1] == "running"
+    return comp, client
+
+
+def overall(comp, client, enabled):
+    if not comp:
+        return "unknown"
+    if not comp.get("parsecd"):
+        return "stopped"
+    wanted = [n for n, _l in COMPONENTS if enabled.get(OPTIONAL.get(n, ""), "1") == "1"]
+    if any(not comp.get(n) for n in wanted):
+        return "degraded"
+    return "connected" if client else "ready"
+
+
+def base_pixmap(size=64):
+    icon = QIcon.fromTheme(ICON_NAME)
+    if not icon.isNull():
+        return icon.pixmap(size, size)
+    pm = QPixmap(size, size)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    s = size / 128
+    p.setBrush(QColor("#2b3a4a"))
+    p.setPen(Qt.NoPen)
+    p.drawRoundedRect(int(12 * s), int(20 * s), int(104 * s), int(70 * s), 8 * s, 8 * s)
+    p.setBrush(QColor("#3daee9"))
+    p.drawRoundedRect(int(19 * s), int(27 * s), int(90 * s), int(56 * s), 3 * s, 3 * s)
+    p.setBrush(QColor("#ffffff"))
+    p.drawPolygon([QPointF(x * s, y * s) for x, y in ((54, 42), (54, 68), (78, 55))])
+    p.setBrush(QColor("#2b3a4a"))
+    p.drawRect(int(56 * s), int(90 * s), int(16 * s), int(14 * s))
+    p.drawRoundedRect(int(38 * s), int(104 * s), int(52 * s), int(8 * s), 4 * s, 4 * s)
+    p.end()
+    return pm
+
+
+def status_icon(state, size=64):
+    pm = base_pixmap(size)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    r = size // 4
+    p.setPen(QPen(QColor("#ffffff"), max(1, size // 32)))
+    p.setBrush(QColor(COLORS[state]))
+    p.drawEllipse(size - r - 1, size - r - 1, r, r)
+    p.end()
+    return QIcon(pm)
+
+
+def run_host(*args):
+    """Starts a host command that outlives the tray."""
+    QProcess.startDetached(HOST, list(args))
+
+
+class Settings(QDialog):
+    def __init__(self, tray):
+        super().__init__()
+        self.tray = tray
+        self.setWindowTitle("Parsec host settings")
+        self.setWindowIcon(QIcon.fromTheme(ICON_NAME) if not QIcon.fromTheme(ICON_NAME).isNull() else status_icon("ready"))
+        lay = QVBoxLayout(self)
+
+        box = QGroupBox("Host")
+        self.status = QFormLayout(box)
+        self.status_rows = {}
+        self.state_label = QLabel()
+        self.status.addRow("State", self.state_label)
+        for name, label in COMPONENTS:
+            row = QLabel()
+            self.status_rows[name] = row
+            self.status.addRow(label, row)
+        lay.addWidget(box)
+
+        box = QGroupBox("Features (applied when the host restarts)")
+        v = QVBoxLayout(box)
+        self.checks = {}
+        vals = plhconfig.effective()
+        for key, (label, _d) in plhconfig.OPTIONS.items():
+            c = QCheckBox(label)
+            c.setChecked(vals[key] == "1")
+            self.checks[key] = c
+            v.addWidget(c)
+        lay.addWidget(box)
+
+        box = QGroupBox("Files")
+        v = QVBoxLayout(box)
+        for text in (f"Settings: {plhconfig.config_path()}", f"Logs: {plhconfig.traces_dir()}"):
+            lab = QLabel(text)
+            lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            lab.setWordWrap(True)
+            v.addWidget(lab)
+        h = QHBoxLayout()
+        b = QPushButton("Open logs folder")
+        b.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(plhconfig.traces_dir()))))
+        h.addWidget(b)
+        b = QPushButton("Open Parsec log")
+        b.clicked.connect(self.open_parsec_log)
+        h.addWidget(b)
+        v.addLayout(h)
+        lay.addWidget(box)
+
+        h = QHBoxLayout()
+        b = QPushButton("Open Parsec")
+        b.clicked.connect(lambda: run_host("open"))
+        h.addWidget(b)
+        h.addStretch(1)
+        b = QPushButton("Save")
+        b.clicked.connect(self.save)
+        h.addWidget(b)
+        b = QPushButton("Save and restart host")
+        b.clicked.connect(lambda: self.save() and tray.restart())
+        h.addWidget(b)
+        b = QPushButton("Close")
+        b.clicked.connect(self.hide)
+        h.addWidget(b)
+        lay.addLayout(h)
+        self.note = QLabel()
+        lay.addWidget(self.note)
+        self.refresh()
+
+    def open_parsec_log(self):
+        user = os.environ.get("USER", "")
+        log = plhconfig.data_dir() / "prefix/drive_c/users" / user / "AppData/Roaming/Parsec/log.txt"
+        if log.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(log)))
+        else:
+            self.note.setText("No Parsec log yet.")
+
+    def values(self):
+        return {k: "1" if c.isChecked() else "0" for k, c in self.checks.items()}
+
+    def save(self):
+        try:
+            path = plhconfig.write(self.values())
+        except (OSError, ValueError) as e:
+            self.note.setText(f"Not saved: {e}")
+            return False
+        self.note.setText(f"Saved to {path}. Restart the host to apply.")
+        return True
+
+    def refresh(self):
+        state = self.tray.state
+        self.state_label.setText(f'<span style="color:{COLORS[state]}">●</span> {TEXT[state]}')
+        for name, _label in COMPONENTS:
+            up = self.tray.components.get(name)
+            if up is None:
+                txt = "-"
+            else:
+                col = "#27ae60" if up else "#8a8a8a"
+                txt = f'<span style="color:{col}">●</span> {"running" if up else "stopped"}'
+            self.status_rows[name].setText(txt)
+
+
+class Tray:
+    def __init__(self, app):
+        self.app = app
+        self.state = "unknown"
+        self.components = {}
+        self.client = False
+        self.settings = None
+        self.proc = None
+        self.first = True
+
+        self.tray = QSystemTrayIcon(status_icon("unknown"))
+        self.tray.setToolTip("Parsec")
+        menu = QMenu()
+        self.title = QAction("Parsec")
+        self.title.setEnabled(False)
+        menu.addAction(self.title)
+        menu.addSeparator()
+        for text, fn in (("Open Parsec", lambda: run_host("open")), ("Settings...", self.show_settings),
+                         ("Restart host", self.restart), ("Quit (stops the host)", self.quit)):
+            a = menu.addAction(text)
+            a.triggered.connect(fn)
+        self.menu = menu
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(self.activated)
+        self.tray.show()
+
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.poll)
+        self.timer.start(3000)
+        self.poll()
+        # The panel may not be up yet at login: ask again until the icon is shown.
+        self.retry = QTimer()
+        self.retry.timeout.connect(self.ensure_visible)
+        self.retry.start(5000)
+
+    def ensure_visible(self):
+        if not self.tray.isVisible() or not QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray.hide()
+            self.tray.show()
+
+    def activated(self, reason):
+        if reason == QSystemTrayIcon.Trigger:
+            run_host("open")
+
+    def poll(self):
+        if self.proc is not None:
+            return
+        self.proc = QProcess()
+        self.proc.finished.connect(self.polled)
+        self.proc.start(HOST, ["status"])
+
+    def polled(self):
+        text = bytes(self.proc.readAllStandardOutput()).decode(errors="replace")
+        self.proc.deleteLater()
+        self.proc = None
+        comp, client = parse_status(text)
+        enabled = plhconfig.effective()
+        state = overall(comp, client, enabled)
+        if not self.first and client != self.client and state != "unknown":
+            self.tray.showMessage("Parsec", "A client connected." if client else "The client disconnected.",
+                                  QSystemTrayIcon.Information, 4000)
+        self.first = False
+        self.client, self.components = client, comp
+        if state != self.state:
+            self.state = state
+            self.tray.setIcon(status_icon(state))
+        self.title.setText(f"Parsec: {TEXT[state]}")
+        self.tray.setToolTip(f"Parsec: {TEXT[state]}")
+        if self.settings is not None and self.settings.isVisible():
+            self.settings.refresh()
+
+    def show_settings(self):
+        if self.settings is None:
+            self.settings = Settings(self)
+        self.settings.refresh()
+        self.settings.show()
+        self.settings.raise_()
+        self.settings.activateWindow()
+
+    def confirm_cut(self, what):
+        """A connected client loses its session: ask first."""
+        if not self.client:
+            return True
+        r = QMessageBox.question(None, "Parsec", f"A client is connected. {what} will cut its session. Continue?",
+                                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        return r == QMessageBox.Yes
+
+    def restart(self):
+        if self.confirm_cut("Restarting the host"):
+            run_host("restart")
+
+    def quit(self):
+        if not self.confirm_cut("Stopping the host"):
+            return
+        p = QProcess()
+        p.start(HOST, ["stop"])
+        p.waitForFinished(30000)
+        self.tray.hide()
+        self.app.quit()
+
+    def handle(self, cmd):
+        if cmd == "settings":
+            self.show_settings()
+
+
+def main():
+    args = sys.argv[1:]
+    app = QApplication(sys.argv[:1])
+    app.setApplicationName("Parsec")
+    app.setApplicationDisplayName("Parsec")
+    app.setDesktopFileName(ICON_NAME)
+    app.setQuitOnLastWindowClosed(False)
+
+    name = f"parsec-tray-{os.getuid()}"
+    sock = QLocalSocket()
+    sock.connectToServer(name)
+    if sock.waitForConnected(500):
+        sock.write(b"settings" if "--settings" in args else b"ping")
+        sock.waitForBytesWritten(500)
+        return 0
+    QLocalServer.removeServer(name)
+    server = QLocalServer()
+    if not server.listen(name):
+        sys.stderr.write(f"parsec-tray: cannot listen on {name}\n")
+        return 1
+
+    tray = Tray(app)
+
+    def on_conn():
+        c = server.nextPendingConnection()
+        c.waitForReadyRead(500)
+        tray.handle(bytes(c.readAll()).decode(errors="replace"))
+        c.disconnectFromServer()
+
+    server.newConnection.connect(on_conn)
+    if "--settings" in args:
+        tray.show_settings()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

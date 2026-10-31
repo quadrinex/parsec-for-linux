@@ -1,0 +1,20 @@
+[Desktop Entry]
+Type=Application
+Name=Parsec
+GenericName=Remote desktop host
+Comment=Parsec host for this desktop (Windows app under Wine)
+Exec=@BIN@ open
+Icon=parsec-for-linux
+Terminal=false
+Categories=Network;RemoteAccess;
+Keywords=parsec;remote;stream;host;
+StartupNotify=false
+Actions=Settings;Restart;
+
+[Desktop Action Settings]
+Name=Settings
+Exec=@BIN@ config
+
+[Desktop Action Restart]
+Name=Restart host
+Exec=@BIN@ restart

@@ -35,11 +35,13 @@ An Arch package definition is in `packaging/arch/PKGBUILD`.
 ## Usage
 
 ```sh
-bin/parsec-linux-host config    # opens the configuration UI (PySide6)
+bin/parsec-linux-host open      # starts the host if needed and shows the Parsec window (also the "Parsec" menu entry)
+bin/parsec-linux-host config    # settings window, in the tray program (needs PySide6; the host runs without it)
+bin/parsec-linux-host launcher add   # menu entry and icon (made from your own Parsec install); `launcher remove` undoes it
 bin/parsec-linux-host start     # starts everything
 bin/parsec-linux-host status    # component and client state
 bin/parsec-linux-host stop      # stops everything
-bin/parsec-linux-host enable    # starts with the session (systemd user service)
+bin/parsec-linux-host enable    # starts with the session (systemd user services: host and tray) and adds the menu entry
 bin/parsec-linux-host disable   # reverts enable
 ```
 

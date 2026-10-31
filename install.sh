@@ -37,4 +37,5 @@ run sudo modprobe uinput
 
 run make -C "$HERE"
 run "$HERE/runtime/setup-prefix.sh"
+run "$HERE/bin/parsec-linux-host" launcher add
 echo "installation complete. Next: bin/parsec-linux-host start, then sign in to Parsec."

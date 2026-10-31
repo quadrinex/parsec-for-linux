@@ -1,0 +1,13 @@
+[Unit]
+Description=Parsec host tray icon
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@ROOT@/bin/parsec-tray
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

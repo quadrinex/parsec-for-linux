@@ -1,6 +1,8 @@
 /* winctl.exe — tool to observe/drive windows INSIDE the Wine prefix.
  * Acts only on the prefix's Win32 windows (public Win32 APIs), never on the KDE desktop.
  *   winctl list | listall               : visible (or all) top-level windows + children
+ *   winctl show "<title>"               : show, restore and raise the top-level window whose title
+ *                                          is exactly <title> (also if hidden); exit 1 if none
  *   winctl click "<title>" "<button>"   : BM_CLICK on the button whose text contains <button>
  *                                          in the window whose title contains <title>
  * Build: x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -municode -o winctl.exe winctl.c
@@ -58,6 +60,14 @@ static BOOL CALLBACK top_find(HWND h, LPARAM l)
     return g_found == NULL;
 }
 
+static BOOL CALLBACK top_show(HWND h, LPARAM l)
+{
+    (void)l;
+    wchar_t txt[256];
+    if (GetWindowTextW(h, txt, 256) && !wcscmp(txt, g_title) && GetParent(h) == NULL) { g_found = h; return FALSE; }
+    return TRUE;
+}
+
 int wmain(int argc, wchar_t **argv)
 {
     if (argc >= 2 && (!wcscmp(argv[1], L"list") || !wcscmp(argv[1], L"listall"))) {
@@ -74,6 +84,16 @@ int wmain(int argc, wchar_t **argv)
         wprintf(L"clicked %p\n", (void *)g_found);
         return 0;
     }
-    fwprintf(stderr, L"usage: winctl list | winctl click <title> <button>\n");
+    if (argc >= 3 && !wcscmp(argv[1], L"show")) {
+        g_title = argv[2];
+        EnumWindows(top_show, 0);
+        if (!g_found) { fwprintf(stderr, L"window not found\n"); return 1; }
+        ShowWindow(g_found, SW_SHOW);
+        if (IsIconic(g_found)) ShowWindow(g_found, SW_RESTORE);
+        SetForegroundWindow(g_found);
+        wprintf(L"shown %p\n", (void *)g_found);
+        return 0;
+    }
+    fwprintf(stderr, L"usage: winctl list | winctl show <title> | winctl click <title> <button>\n");
     return 64;
 }

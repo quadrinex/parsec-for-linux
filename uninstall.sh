@@ -17,12 +17,19 @@ run() { echo "+ $*"; [ "$DRY" = 1 ] || "$@"; }
 # Stop the host if it is running.
 if [ -x "$HERE/bin/parsec-linux-host" ]; then run "$HERE/bin/parsec-linux-host" stop || true; fi
 
+# The tray icon (it survives host restarts, so `stop` leaves it).
+run pkill -f 'bin/parsec-tra[y]' || true
+
 # --- Undo steps (one per ROLLBACK.md line) ---
 BASE_PKGS="$HERE/backups/pkglist-all-20261030-072800.txt"
 was_installed() { [ -f "$BASE_PKGS" ] && grep -q "^$1 " "$BASE_PKGS"; }
 
-# [6] optional user systemd service
-if [ -e "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/parsec-linux-host.service" ]; then
+# [8] tray unit, settings saved outside the repository  ([6] and [8] units are removed by `disable`)
+run rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/parsec-for-linux/config.env"
+# [7] application menu entry and icon
+if [ -x "$HERE/bin/parsec-linux-host" ]; then run "$HERE/bin/parsec-linux-host" launcher remove; fi
+# [6] optional user systemd service (host and tray)
+if [ -e "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/parsec-linux-host.service" ] || [ -e "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/parsec-tray.service" ]; then
   run "$HERE/bin/parsec-linux-host" disable
 fi
 # [5] project user data

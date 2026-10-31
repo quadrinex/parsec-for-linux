@@ -10,7 +10,7 @@ url="https://github.com/CHANGEME/parsec-for-linux"
 license=('MIT' 'LGPL-2.1-or-later')
 depends=('libva' 'libei' 'pipewire' 'wayland' 'systemd-libs' 'libxcb' 'lib32-vulkan-icd-loader' 'lib32-mesa' 'lib32-libpipewire' 'curl' 'python')
 makedepends=('git' 'gcc' 'make' 'mingw-w64-gcc' 'x264')
-optdepends=('pyside6: configuration UI'
+optdepends=('pyside6: tray icon and settings window'
             'x264: fallback software encoding')
 source=("parsec-for-linux::git+file://${startdir}/../..")
 sha256sums=('SKIP')
@@ -31,6 +31,12 @@ package() {
     "$pkgdir/usr/lib/modules-load.d/70-parsec-linux-host-uinput.conf"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 NOTICE.md "$pkgdir/usr/share/licenses/$pkgname/NOTICE.md"
+  # Menu entry (Exec through /usr/bin) and a generic icon: `parsec-linux-host launcher add` replaces the
+  # icon by the one of the user's own Parsec install.
+  sed 's|@BIN@|/usr/bin/parsec-linux-host|g' packaging/desktop/parsec-for-linux.desktop |
+    install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/parsec-for-linux.desktop"
+  python3 -I runtime/make-icon.py install --exe /nonexistent --dest "$pkgdir/usr/share/icons"
   install -d "$pkgdir/usr/bin"
   ln -s /opt/parsec-for-linux/bin/parsec-linux-host "$pkgdir/usr/bin/parsec-linux-host"
+  ln -s /opt/parsec-for-linux/bin/parsec-tray "$pkgdir/usr/bin/parsec-tray"
 }
