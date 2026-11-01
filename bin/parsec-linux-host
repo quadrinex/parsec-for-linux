@@ -61,6 +61,7 @@ start() {
     [ -z "$layout" ] || printf '%s\n' "$layout" >"$PLH_TRACES/screen-layout"
     pgrep -f 'parsec-linux-host[ ]watch' >/dev/null || nohup "$0" watch >/dev/null 2>&1 </dev/null &
     "$ROOT/runtime/run-parsec.sh" --full
+    [ "${PLH_SHOW_WINDOW:-0}" = 1 ] || hide_window >/dev/null 2>&1 </dev/null &
 }
 
 # Wine and the uinput absolute device only know the layout seen at start: a screen change needs
@@ -118,13 +119,31 @@ status() {
 }
 
 # Shows the Parsec window, which Parsec hides when it starts. Starts the host first if needed.
-open_parsec() {
-    local winctl="$ROOT/build/runtime/winctl.exe" src="$ROOT/runtime/tools/winctl.c" i
+winctl_exe() {
+    local winctl="$ROOT/build/runtime/winctl.exe" src="$ROOT/runtime/tools/winctl.c"
     if [ ! -f "$winctl" ] || [ "$src" -nt "$winctl" ]; then
         mkdir -p "$ROOT/build/runtime"
         x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -municode -o "$winctl" "$src" 2>/dev/null || true
     fi
-    running || start >/dev/null
+    echo "$winctl"
+}
+
+# Parsec opens its window at launch: hide it once it exists, as closing it to the tray would.
+hide_window() {
+    local winctl hidden=0 i
+    winctl="$(winctl_exe)"
+    for i in $(seq 60); do
+        if WINEDEBUG=-all "$WINE" "$winctl" hide Parsec >/dev/null 2>&1; then hidden=$((hidden + 1)); fi
+        # It can show itself again while starting up.
+        [ "$hidden" -ge 5 ] && return 0
+        sleep 1
+    done
+}
+
+open_parsec() {
+    local winctl i
+    winctl="$(winctl_exe)"
+    running || PLH_SHOW_WINDOW=1 start >/dev/null
     for i in $(seq 60); do
         if WINEDEBUG=-all "$WINE" "$winctl" show Parsec >/dev/null 2>&1; then return 0; fi
         sleep 1

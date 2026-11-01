@@ -1,6 +1,7 @@
 /* winctl.exe — tool to observe/drive windows INSIDE the Wine prefix.
  * Acts only on the prefix's Win32 windows (public Win32 APIs), never on the KDE desktop.
  *   winctl list | listall               : visible (or all) top-level windows + children
+ *   winctl hide "<title>"               : hide the top-level window whose title is <title>
  *   winctl show "<title>"               : show, restore and raise the top-level window whose title
  *                                          is exactly <title> (also if hidden); exit 1 if none
  *   winctl click "<title>" "<button>"   : BM_CLICK on the button whose text contains <button>
@@ -84,6 +85,14 @@ int wmain(int argc, wchar_t **argv)
         wprintf(L"clicked %p\n", (void *)g_found);
         return 0;
     }
+    if (argc >= 3 && !wcscmp(argv[1], L"hide")) {
+        g_title = argv[2];
+        EnumWindows(top_show, 0);
+        if (!g_found) return 1;
+        ShowWindow(g_found, SW_HIDE);
+        wprintf(L"hidden %p\n", (void *)g_found);
+        return 0;
+    }
     if (argc >= 3 && !wcscmp(argv[1], L"show")) {
         g_title = argv[2];
         EnumWindows(top_show, 0);
@@ -94,6 +103,6 @@ int wmain(int argc, wchar_t **argv)
         wprintf(L"shown %p\n", (void *)g_found);
         return 0;
     }
-    fwprintf(stderr, L"usage: winctl list | winctl show <title> | winctl click <title> <button>\n");
+    fwprintf(stderr, L"usage: winctl list | winctl show|hide <title> | winctl click <title> <button>\n");
     return 64;
 }
