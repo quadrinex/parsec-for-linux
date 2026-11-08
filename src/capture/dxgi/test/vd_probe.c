@@ -1,6 +1,6 @@
 /* vd_probe.c — F1 probe (owner: capture): lists the DXGI outputs, duplicates the "Virtual display" placeholder, receives
  * frames, releases, and watches the output set change. Run in the dedicated prefix with the proxy installed.
- * usage: vd_probe [seconds_to_hold]   prints PH/OUT/FRAMES lines. */
+ * usage: vd_probe [seconds_to_hold [f2]]   (f2: duplicate output 0, the "default" screen, instead of the placeholder)   prints PH/OUT/FRAMES lines. */
 #define COBJMACROS
 #define INITGUID
 #include <windows.h>
@@ -38,6 +38,7 @@ int main(int argc, char **argv)
     ID3D11Device *dev; D3D_FEATURE_LEVEL fl;
     if (FAILED(D3D11CreateDevice(a, D3D_DRIVER_TYPE_UNKNOWN, NULL, 0, NULL, 0, D3D11_SDK_VERSION, &dev, &fl, NULL))) { puts("FAIL device"); return 1; }
     IDXGIOutput5 *o5 = NULL;
+    if (argc > 2) { IDXGIOutput_Release(last); IDXGIAdapter_EnumOutputs(a, 0, &last); }
     IDXGIOutput_QueryInterface(last, &IID_IDXGIOutput5, (void **)&o5);
     DXGI_FORMAT fmt = DXGI_FORMAT_B8G8R8A8_UNORM;
     IDXGIOutputDuplication *dup = NULL;

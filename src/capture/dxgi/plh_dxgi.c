@@ -60,6 +60,7 @@ static FARPROC real(const char *name)
 /* ---------- bridge ---------- */
 struct dup;
 static void vout_unref(void);
+static void redirect_clear(void);
 static int is_placeholder(void *o);
 static CRITICAL_SECTION g_lock;      /* protects g_dups, g_conn */
 static struct dup *g_dups[MAXDUP];
@@ -88,6 +89,7 @@ struct dup {
     int cur_visible; int cur_x, cur_y, cur_hot_x, cur_hot_y; uint32_t cur_w, cur_h;
     uint8_t *shape; int shape_known, shape_dirty;
     uint32_t rep_state;
+    int redirect;                  /* F2: an input redirect was pushed for this duplication */
     int virt;                      /* duplicates the bridge virtual output (holds a vout reference) */
 };
 #define DUP(p) ((struct dup *)(p))
@@ -201,6 +203,7 @@ static ULONG STDMETHODCALLTYPE d_Release(IDXGIOutputDuplication *s)
     if (d->mt) ID3D10Multithread_Release(d->mt);
     if (d->ctx) ID3D11DeviceContext_Release(d->ctx);
     if (d->dev) ID3D11Device_Release(d->dev);
+    if (d->redirect) redirect_clear();
     if (d->virt) vout_unref();
     DeleteCriticalSection(&d->cs);
     free(d->shape); free(d);
@@ -564,14 +567,28 @@ static void vout_unref(void)
     LeaveCriticalSection(&g_lock);
 }
 
+/* F2 trigger: the bridge says every real output is off and PLH_VIRTUAL_DISPLAY_AUTO is on */
+static int f2_wanted(struct plh_conn *c)
+{
+    struct plh_display_state st; uint32_t n = 0;
+    if (plh_conn_request(c, PLH_MSG_DISPLAY_STATE, NULL, 0, &st, sizeof st, &n, 3000)) return 0;
+    return (st.flags & PLH_DS_AUTO) && st.real_on == 0;
+}
+
+static void redirect_clear(void)
+{
+    struct plh_input_redirect_hdr h = { 0, 0 };
+    if (g_conn) plh_conn_send(g_conn, PLH_MSG_INPUT_REDIRECT, &h, sizeof h);
+}
+
 /* VOUT_CREATE (or join the existing output) and take a reference; reply in *vr */
-static int vout_ref(struct plh_conn *c, struct plh_vout_create_reply *vr)
+static int vout_ref(struct plh_conn *c, struct plh_vout_create_reply *vr, uint32_t w, uint32_t h)
 {
     glock();
     g_grace_gen++;                                /* cancels a pending destroy */
     g_vout_users++;
     LeaveCriticalSection(&g_lock);
-    struct plh_vout_create rq = { 0, 0, 0, 0 };
+    struct plh_vout_create rq = { w, h, 0, 0 };
     uint32_t n = 0;
     int r = plh_conn_request(c, PLH_MSG_VOUT_CREATE, &rq, sizeof rq, vr, sizeof *vr, &n, 15000);
     if (r) { plog("VOUT_CREATE failed (%d)", r); vout_unref(); }
@@ -594,29 +611,49 @@ static HRESULT do_duplicate(IDXGIOutput *out, IUnknown *device, const char *vari
     if (plh_conn_request(c, PLH_MSG_CAP_LIST_OUTPUTS, NULL, 0, lbuf, sizeof lbuf, &ll, 5000)) { ID3D11Device_Release(dev); return DXGI_ERROR_UNSUPPORTED; }
     const struct plh_cap_output_list *lst = (void *)lbuf;
     const struct plh_cap_output *bo = (void *)(lbuf + sizeof *lst);
-    int which = -1, virt = 0;
+    int which = -1, virt = 0, f2 = 0;
     struct plh_cap_output phout;
     if (is_placeholder(out)) {                    /* the "Virtual display" entry: create the KWin output */
         struct plh_vout_create_reply vr;
-        if (vout_ref(c, &vr)) { ID3D11Device_Release(dev); return DXGI_ERROR_UNSUPPORTED; }
+        if (vout_ref(c, &vr, 0, 0)) { ID3D11Device_Release(dev); return DXGI_ERROR_UNSUPPORTED; }
         memset(&phout, 0, sizeof phout);
         phout.output_id = vr.output_id; phout.x = vr.x; phout.y = vr.y; phout.width = vr.width; phout.height = vr.height;
         phout.refresh_mhz = vr.refresh_mhz; phout.flags = PLH_CAP_OUTPUT_VIRTUAL;
         snprintf(phout.name, sizeof phout.name, "%s", vr.name);
         virt = 1; which = 0;
         bo = &phout;
+    } else if (f2_wanted(c)) {                    /* F2: every real screen is off -> show the virtual one instead */
+        DXGI_OUTPUT_DESC od;
+        uint32_t fw = 0, fh = 0;
+        if (SUCCEEDED(IDXGIOutput_GetDesc(out, &od))) {
+            fw = (uint32_t)(od.DesktopCoordinates.right - od.DesktopCoordinates.left);
+            fh = (uint32_t)(od.DesktopCoordinates.bottom - od.DesktopCoordinates.top);
+        } else memset(&od, 0, sizeof od);
+        struct plh_vout_create_reply vr;
+        if (vout_ref(c, &vr, fw, fh)) { ID3D11Device_Release(dev); return DXGI_ERROR_UNSUPPORTED; }
+        memset(&phout, 0, sizeof phout);
+        phout.output_id = vr.output_id; phout.x = vr.x; phout.y = vr.y; phout.width = vr.width; phout.height = vr.height;
+        phout.refresh_mhz = vr.refresh_mhz; phout.flags = PLH_CAP_OUTPUT_VIRTUAL;
+        snprintf(phout.name, sizeof phout.name, "%s", vr.name);
+        virt = 1; which = 0; bo = &phout;
+        struct { struct plh_input_redirect_hdr h; struct plh_redirect r; } rd = { { 1, 0 }, {
+            { od.DesktopCoordinates.left, od.DesktopCoordinates.top, od.DesktopCoordinates.right, od.DesktopCoordinates.bottom },
+            { vr.x, vr.y, vr.x + (int32_t)vr.width, vr.y + (int32_t)vr.height } } };
+        if (plh_conn_send(c, PLH_MSG_INPUT_REDIRECT, &rd, sizeof rd) == 0) f2 = 1;
+        plog("F2: real screens off, %s duplicates the virtual output; input redirect Windows %ld,%ld,%ld,%ld -> KWin %d,%d,%d,%d (sent=%d)",
+             variant, rd.r.from.left, rd.r.from.top, rd.r.from.right, rd.r.from.bottom, rd.r.to.left, rd.r.to.top, rd.r.to.right, rd.r.to.bottom, f2);
     } else if (!lst->count || !match_output(out, bo, (int)lst->count, &which, NULL, NULL)) {
         plog("%s: no bridge output matches", variant);
         ID3D11Device_Release(dev);
         return DXGI_ERROR_UNSUPPORTED;
     } else if (bo[which].flags & PLH_CAP_OUTPUT_VIRTUAL) {   /* Wine now lists the real virtual output */
         struct plh_vout_create_reply vr;
-        if (vout_ref(c, &vr)) { ID3D11Device_Release(dev); return DXGI_ERROR_UNSUPPORTED; }
+        if (vout_ref(c, &vr, 0, 0)) { ID3D11Device_Release(dev); return DXGI_ERROR_UNSUPPORTED; }
         virt = 1;
     }
     struct dup *d = calloc(1, sizeof *d);
     if (!d) { if (virt) vout_unref(); ID3D11Device_Release(dev); return E_OUTOFMEMORY; }
-    d->virt = virt;
+    d->virt = virt; d->redirect = f2;
     d->iface.lpVtbl = (IDXGIOutputDuplicationVtbl *)&g_dvtbl; d->ref = 1; d->dev = dev;
     InitializeCriticalSection(&d->cs); InitializeConditionVariable(&d->cv);
     struct plh_cap_open op = { bo[which].output_id, PLH_CAP_BACKEND_AUTO, PLH_CAP_F_CURSOR_METADATA, 0, 4, PLH_FMT_BGRA8 };
@@ -653,6 +690,7 @@ fail:
     if (d->mt) ID3D10Multithread_Release(d->mt);
     if (d->ctx) ID3D11DeviceContext_Release(d->ctx);
     ID3D11Device_Release(dev);
+    if (d->redirect) redirect_clear();
     if (d->virt) vout_unref();
     DeleteCriticalSection(&d->cs); free(d);
     return DXGI_ERROR_UNSUPPORTED;
