@@ -25,9 +25,28 @@ static int mouse_rel_mode;
 
 #define MAX_REDIR 4
 
+/* Redirect table: Windows rect -> KWin rect. Pushed by the DXGI proxy connection, applied to the events of
+ * EVERY input client (the hook is another connection), dropped when the owner connection goes away. */
+static struct { struct plh_redir e; const struct plh_client *owner; } gredir[2 * MAX_REDIR];
+static int ngredir;
+
+static void redir_drop_owner(const struct plh_client *o)
+{
+    int k = 0;
+    for (int i = 0; i < ngredir; i++) if (gredir[i].owner != o) gredir[k++] = gredir[i];
+    if (k != ngredir) PLH_INFO(MOD, "redirect entries of a closed connection dropped (%d -> %d)", ngredir, k);
+    ngredir = k;
+}
+
+/* First matching entry wins (Windows coordinates in, KWin out). */
+static int redir_map(int wx, int wy, int *kx, int *ky)
+{
+    for (int i = 0; i < ngredir; i++)
+        if (plh_redirect_map(&gredir[i].e, 1, wx, wy, kx, ky)) return 1;
+    return 0;
+}
+
 struct icli {
-    struct plh_redir redir[MAX_REDIR];   /* Windows rect -> KWin rect, released with the client */
-    int nredir;
     struct icli *next;            /* all clients, to shift tx/ty when the KWin origin moves */
     int tx, ty;                   /* KWin = Windows + T, for this client */
     unsigned char keys[KEY_CNT / 8 + 1];
@@ -124,7 +143,7 @@ static int apply(struct icli *s, const struct plh_input_ev *e)
         if (mouse_rel_mode) return 1;                                       /* dropped (relative mode) */
         {   /* outside the desktop = invalid message: rejected (never clamped to an edge, see the 0,31 incident) */
             int x = e->a + s->tx, y = e->b + s->ty;
-            plh_redirect_map(s->redir, s->nredir, e->a, e->b, &x, &y);   /* before the in-desktop check */
+            redir_map(e->a, e->b, &x, &y);   /* before the in-desktop check */
             if (x < desk.x || y < desk.y || x >= desk.x + desk.w || y >= desk.y + desk.h)
                 refresh_layout();   /* cached desktop may be stale (screen added/removed); re-checked below */
             if (x < desk.x || y < desk.y || x >= desk.x + desk.w || y >= desk.y + desk.h) return -1;
@@ -144,6 +163,32 @@ static int apply(struct icli *s, const struct plh_input_ev *e)
 
 static void handle(struct plh_client *c, const struct plh_msg_hdr *h, const void *p)
 {
+    if (h->type == PLH_MSG_INPUT_REDIRECT) {   /* sent by the DXGI proxy, not an injector */
+        uint32_t k = plh_client_kind(c);
+        if (k != PLH_CLIENT_DXGI && k != PLH_CLIENT_INPUT && k != PLH_CLIENT_TEST && k != PLH_CLIENT_TOOL) {
+            if (h->seq) plh_reply_error(c, h, PLH_E_PERM, "client not allowed to redirect");
+            return;
+        }
+        const struct plh_input_redirect_hdr *rh = p;
+        if (h->size < sizeof *rh || rh->count > MAX_REDIR ||
+            h->size < sizeof *rh + (uint64_t)rh->count * sizeof(struct plh_redirect)) {
+            if (h->seq) plh_reply_error(c, h, PLH_E_PROTO, "size");
+            return;
+        }
+        const struct plh_redirect *pr = (const void *)(rh + 1);
+        redir_drop_owner(c);                              /* the new table replaces the owner's old one */
+        int added = 0;
+        for (uint32_t i = 0; i < rh->count && ngredir < (int)(sizeof gredir / sizeof *gredir); i++) {
+            struct plh_redir e = {
+                { pr[i].from.left, pr[i].from.top, pr[i].from.right - pr[i].from.left, pr[i].from.bottom - pr[i].from.top },
+                { pr[i].to.left, pr[i].to.top, pr[i].to.right - pr[i].to.left, pr[i].to.bottom - pr[i].to.top } };
+            if (e.from.w <= 0 || e.from.h <= 0 || e.to.w <= 0 || e.to.h <= 0) continue;   /* degenerate: ignored */
+            gredir[ngredir].e = e; gredir[ngredir].owner = c; ngredir++; added++;
+        }
+        PLH_INFO(MOD, "client %u: %d redirect entries", plh_client_id(c), added);
+        if (h->seq) plh_reply(c, h, NULL, 0);
+        return;
+    }
     /* Only clients declared "input" (plh-input-hook) or native tools may inject:
      * an adversarial bridge test or another service must never move the real cursor. */
     uint32_t kind = plh_client_kind(c);
@@ -214,26 +259,6 @@ static void handle(struct plh_client *c, const struct plh_msg_hdr *h, const void
         if (h->seq) { struct plh_input_status st = { PLH_OK, 1 }; plh_reply(c, h, &st, sizeof st); }
         return;
     }
-    case PLH_MSG_INPUT_REDIRECT: {
-        const struct plh_input_redirect_hdr *rh = p;
-        if (h->size < sizeof *rh || rh->count > MAX_REDIR ||
-            h->size < sizeof *rh + (uint64_t)rh->count * sizeof(struct plh_redirect)) {
-            if (h->seq) plh_reply_error(c, h, PLH_E_PROTO, "size");
-            return;
-        }
-        const struct plh_redirect *pr = (const void *)(rh + 1);
-        s->nredir = 0;                                   /* the new table replaces the old one */
-        for (uint32_t i = 0; i < rh->count; i++) {
-            struct plh_redir e = {
-                { pr[i].from.left, pr[i].from.top, pr[i].from.right - pr[i].from.left, pr[i].from.bottom - pr[i].from.top },
-                { pr[i].to.left, pr[i].to.top, pr[i].to.right - pr[i].to.left, pr[i].to.bottom - pr[i].to.top } };
-            if (e.from.w <= 0 || e.from.h <= 0 || e.to.w <= 0 || e.to.h <= 0) continue;   /* degenerate: ignored */
-            s->redir[s->nredir++] = e;
-        }
-        PLH_INFO(MOD, "client %u: %d redirect entries", plh_client_id(c), s->nredir);
-        if (h->seq) plh_reply(c, h, NULL, 0);
-        return;
-    }
     case PLH_MSG_INPUT_RELEASE_ALL: {
         release_all(s);
         struct plh_input_status st = { PLH_OK, 0 };
@@ -246,6 +271,7 @@ static void handle(struct plh_client *c, const struct plh_msg_hdr *h, const void
 
 static void client_gone(struct plh_client *c)
 {
+    redir_drop_owner(c);
     struct icli *s = plh_client_get_data(c, PLH_SVC_INPUT);
     if (!s) return;
     release_all(s);
