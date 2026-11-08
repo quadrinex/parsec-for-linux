@@ -39,6 +39,7 @@ $(OUT)/test_api: tests/test_api.c $(OUT)/libplhenc.a
 test: all
 	$(OUT)/test_api
 	./tests/run-tests.sh $(OUT)
+	./tests/run-size-tests.sh native
 
 clean:
 	rm -rf $(OUT)
@@ -59,3 +60,13 @@ $(OUT)/amf/amf-simple.exe: tests/amf-simple.cpp
 
 amf: $(OUT)/amf/amfrt64.dll $(OUT)/amf/amf-simple.exe
 .PHONY: amf
+
+$(OUT)/amf/amf-sizes.exe: tests/amf-sizes.cpp
+	@mkdir -p $(dir $@)
+	$(MINGWXX) $(AMFFLAGS) -static $< -o $@ -ld3d11
+amf: $(OUT)/amf/amf-sizes.exe
+
+# Size changes through amfrt64.dll under Wine, private bridge (about 6 min): make -C src/encode test-sizes
+test-sizes: all amf
+	./tests/run-size-tests.sh amf
+.PHONY: test-sizes

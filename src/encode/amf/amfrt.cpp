@@ -485,7 +485,10 @@ AMF_RESULT Encoder::Init(AMF_SURFACE_FORMAT format, amf_int32 width, amf_int32 h
     o.codec = hevc ? PLH_ENC_CODEC_HEVC : PLH_ENC_CODEC_H264;
     o.width = width; o.height = height; o.fps_num = 60; o.fps_den = 1;
     if (getv(L"FrameRate", &vs) && vs.type == AMF_VARIANT_RATE && vs.rateValue.num && vs.rateValue.den) { o.fps_num = vs.rateValue.num; o.fps_den = vs.rateValue.den; }
-    if (getv(L"FrameSize", &vs) && vs.type == AMF_VARIANT_SIZE && vs.sizeValue.width > 0) { o.width = vs.sizeValue.width; o.height = vs.sizeValue.height; }
+    /* Init()/ReInit() arguments win (AMF semantics: they update FrameSize); the property only fills in a missing size.
+     * A stale FrameSize from the previous session must never override a new size (virtual display / display switch). */
+    if ((width <= 0 || height <= 0) && getv(L"FrameSize", &vs) && vs.type == AMF_VARIANT_SIZE && vs.sizeValue.width > 0) { o.width = vs.sizeValue.width; o.height = vs.sizeValue.height; }
+    if (o.width <= 0 || o.height <= 0) { close_session(); return AMF_INVALID_ARG; }
     o.rc = geti(L"RateControlMethod", &v) ? rcmap(v, hevc) : PLH_ENC_RC_CBR;
     o.bitrate = geti(L"TargetBitrate", &v) ? (uint32_t)v : 10000000;
     o.peak_bitrate = geti(L"PeakBitrate", &v) ? (uint32_t)v : o.bitrate;
@@ -508,6 +511,8 @@ AMF_RESULT Encoder::Init(AMF_SURFACE_FORMAT format, amf_int32 width, amf_int32 h
     if (st || orp.status != 0 || len < sizeof orp) { alog("ENC_OPEN failed st=%d status=%d", st, orp.status); close_session(); return AMF_CODEC_NOT_SUPPORTED; }
     if (plh_shm_map(&shm, orp.shm_name, orp.shm_size)) { alog("shm_map failed %s", orp.shm_name); sid = orp.session_id; open = true; close_session(); return AMF_FAIL; }
     shm_ok = true; sid = orp.session_id; open = true; w = o.width; h = o.height; fmt = format; drained = false;
+    for (auto b : out) b->Release();
+    out.clear(); nframes = 0;   /* new session: first frame is an IDR, slots restart at 0 */
     alog("session %u opened (backend %s)", sid, orp.backend);
     return AMF_OK;
 }
@@ -515,10 +520,33 @@ AMF_RESULT Encoder::Init(AMF_SURFACE_FORMAT format, amf_int32 width, amf_int32 h
 AMF_RESULT Encoder::ReInit(amf_int32 width, amf_int32 height)
 {
     alog("ReInit %dx%d", width, height);
-    AMF_SURFACE_FORMAT f = fmt; { close_session(); }
+    AMF_SURFACE_FORMAT f = fmt;
+    { std::lock_guard<std::mutex> l(mu); close_session(); for (auto b : out) b->Release(); out.clear(); nframes = 0; }
+    { AMFVariantStruct z; memset(&z, 0, sizeof z); z.type = AMF_VARIANT_SIZE; z.sizeValue.width = width; z.sizeValue.height = height;
+      props_.set(hevc ? L"HevcFrameSize" : L"FrameSize", z); }
     return Init(f, width, height);
 }
 AMF_RESULT Encoder::Terminate() { alog("Terminate"); std::lock_guard<std::mutex> l(mu); close_session(); return AMF_OK; }
+
+/* The frame sent to the bridge must be exactly the session size. When the source is smaller (texture/surface
+ * not yet resized after a display switch) the missing area is filled with black instead of failing the frame. */
+static void pad_black(uint8_t *slot, uint32_t stride, uint64_t uvoff, bool nv12, uint32_t cw, uint32_t ch, uint32_t w, uint32_t h)
+{
+    if (cw >= w && ch >= h) return;
+    if (nv12) {
+        for (uint32_t y = 0; y < h; y++) if (y >= ch) memset(slot + (size_t)y * stride, 16, w); else if (cw < w) memset(slot + (size_t)y * stride + cw, 16, w - cw);
+        for (uint32_t y = 0; y < (h + 1) / 2; y++) {
+            uint8_t *row = slot + uvoff + (size_t)y * stride;
+            if (y >= (ch + 1) / 2) memset(row, 128, w); else if (cw < w) memset(row + cw, 128, w - cw);
+        }
+    } else {
+        for (uint32_t y = 0; y < h; y++) {
+            uint32_t *row = (uint32_t *)(slot + (size_t)y * stride);
+            uint32_t from = y >= ch ? 0 : cw;
+            for (uint32_t x = from; x < w; x++) row[x] = 0xff000000u;
+        }
+    }
+}
 
 AMF_RESULT Encoder::read_texture(SurfaceImpl *s, uint8_t *slot, uint32_t stride, uint32_t *uvoff, uint32_t *pf, uint32_t *rw, uint32_t *rh)
 {
@@ -553,6 +581,8 @@ AMF_RESULT Encoder::read_texture(SurfaceImpl *s, uint8_t *slot, uint32_t stride,
             *uvoff = 0; *pf = d.Format == DXGI_FORMAT_B8G8R8A8_UNORM ? PLH_FMT_BGRA8 : PLH_FMT_RGBA8;
         }
         dc->Unmap(stage, 0);
+        pad_black(slot, stride, *uvoff, d.Format == DXGI_FORMAT_NV12, cw, ch, (uint32_t)w, (uint32_t)h);
+        *rw = (uint32_t)w; *rh = (uint32_t)h;
     }
     dc->Release(); dev->Release();
     return r;
@@ -577,7 +607,7 @@ AMF_RESULT Encoder::SubmitInput(AMFData *data)
         fr.uv_offset = uvo;
     } else if (s->mem == AMF_MEMORY_HOST && !s->planes.empty()) {
         uint32_t cw = (uint32_t)(s->w < w ? s->w : w), ch = (uint32_t)(s->h < h ? s->h : h);
-        fr.width = cw; fr.height = ch;
+        fr.width = (uint32_t)w; fr.height = (uint32_t)h;
         if (s->fmt == AMF_SURFACE_NV12) {
             fr.format = PLH_FMT_NV12; fr.uv_offset = (uint64_t)orp.in_stride * h;
             for (uint32_t y = 0; y < ch; y++) memcpy(slot + (size_t)y * orp.in_stride, (uint8_t *)s->planes[0]->ptr + (size_t)y * s->planes[0]->pitch, cw);
@@ -586,6 +616,7 @@ AMF_RESULT Encoder::SubmitInput(AMFData *data)
             fr.format = s->fmt == AMF_SURFACE_BGRA ? PLH_FMT_BGRA8 : PLH_FMT_RGBA8;
             for (uint32_t y = 0; y < ch; y++) memcpy(slot + (size_t)y * orp.in_stride, (uint8_t *)s->planes[0]->ptr + (size_t)y * s->planes[0]->pitch, (size_t)cw * 4);
         }
+        pad_black(slot, orp.in_stride, fr.uv_offset, s->fmt == AMF_SURFACE_NV12, cw, ch, (uint32_t)w, (uint32_t)h);
     } else r = AMF_NOT_SUPPORTED;
     if (r != AMF_OK) { alog("SubmitInput: surface read failed %d (mem=%d)", (int)r, (int)s->mem); sf->Release(); return r; }
 
