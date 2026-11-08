@@ -23,8 +23,12 @@ client_connected() {
 }
 
 # At session start the screens appear one at a time, and Wine keeps the layout it saw first.
+# Our virtual display (KWin output "Virtual-plh-*") comes and goes during sessions and is followed
+# live, so it is left out; so are the monitor count and indexes it shifts.
 screen_layout() {
-    xrandr --listmonitors 2>/dev/null || kscreen-doctor -o 2>/dev/null
+    local out
+    out="$(xrandr --listmonitors 2>/dev/null)" || out="$(kscreen-doctor -o 2>/dev/null)" || return 0
+    printf '%s\n' "$out" | grep -v -e 'Virtual-plh' -e '^Monitors:' | sed -E 's/^ *[0-9]+: //'
 }
 
 wait_for_screens() {
