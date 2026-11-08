@@ -36,9 +36,12 @@ CHOICES = {
 
 
 def valid_mode(text):
-    """True for 'WIDTHxHEIGHT' within the limits the encoder supports (320..4096 wide, 200..4096 high)."""
+    """True for 'WIDTHxHEIGHT' with even sizes within the encoder limits (320..4096 wide, 200..2304 high)."""
     m = re.fullmatch(r"(\d{3,4})x(\d{3,4})", str(text))
-    return bool(m) and 320 <= int(m.group(1)) <= 4096 and 200 <= int(m.group(2)) <= 4096
+    if not m:
+        return False
+    w, h = int(m.group(1)), int(m.group(2))
+    return 320 <= w <= 4096 and 200 <= h <= 2304 and w % 2 == 0 and h % 2 == 0
 
 _LINE = re.compile(r'^:\s+"\$\{(\w+):=(.*)\}"\s*$')
 _HEADER = (
