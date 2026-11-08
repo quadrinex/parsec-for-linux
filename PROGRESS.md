@@ -86,7 +86,8 @@ Nothing is "done" without a test that proves it. Last update: 2026-10-30 (start)
 - Patch 0003 has not been verified on a real WebSocket drop.
 - t10, t11, t12 require that no keep-above window hides the test pattern.
 - The uinput input service injects into the real session while a client is connected.
-- Virtual display (on demand, and automatic when the screens are off): **planned, not built** (`docs/plan-virtual-display.md`, D-019). Parsec's own virtual display fails at every connection (`MM_Connect`, its private driver).
+- Virtual display (on demand, and automatic when the screens are off): **being built** (`docs/plan-virtual-display.md`, D-019, D-020); options off by default until `t42-virtual-display.sh` passes and a real client has tried it. Encoder sizes for it proven by `src/encode/tests/run-size-tests.sh native|amf` (H.264 and HEVC up to 4096x2304 on VA-API; even sizes only; H.264 wider than 4096 falls back to software).
+- **Incident 2026-11-08 21:57:25:** an encoder test feeding an odd-sized (1921x1081) NV12 D3D11 texture through DXVK caused a GPU ring timeout and a full amdgpu reset (kernel log: `ring gfx_0.1.0 timeout`, kwin_wayland's ring). The desktop recovered. Rule since: no odd-sized NV12 D3D11 textures in tests; the virtual display only accepts even sizes.
 
 ## Phase 2: actual state
 - Done and tested here: Wayland/KDE detection, encoder selection, x264 software encoding, KWin geometry, `install.sh` on Arch, PKGBUILD (`makepkg` succeeded, package not installed).
