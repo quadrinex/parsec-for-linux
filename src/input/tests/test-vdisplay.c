@@ -15,6 +15,13 @@ int main(void)
     struct plh_output k[4] = { mk("HDMI-A-1", 0, 0, 1920, 1080, 2), mk("DP-2", 1920, 0, 1920, 1080, 1), mk("HDMI-A-2", 3840, 0, 1920, 1080, 3), mk("Virtual-plh-virtual", 5760, 0, 1920, 1080, 4) };
     CHECK(plh_output_is_virtual("Virtual-plh-virtual") && plh_output_is_virtual("plh-virtual") && !plh_output_is_virtual("DP-2"));
 
+    /* kscreen-doctor prints "disable unsupported" (not "enabled") for the virtual output: it must still count */
+    { struct plh_output ko[6];
+      int kn = plh_parse_kscreen("Output: 1 Virtual-plh-virtual uuid\n\tdisable unsupported\n\tconnected\n\tpriority 4\n\tGeometry: 5760,0 1920x1080\n"
+                                 "Output: 2 HDMI-A-1 uuid\n\tenabled\n\tpriority 3\n\tGeometry: 0,0 1920x1080\n"
+                                 "Output: 3 DP-9 uuid\n\tdisabled\n\tpriority 0\n", ko, 6);
+      CHECK(kn == 2 && !strcmp(ko[0].name, "Virtual-plh-virtual") && ko[0].x == 5760 && !strcmp(ko[1].name, "HDMI-A-1")); }
+
     /* desk refresh: 3 outputs -> 4 (virtual added) -> 3 (removed) */
     plh_rect d; int tx, ty;
     CHECK(plh_layout_snapshot(k, 3, &d, &tx, &ty) == 0 && d.w == 5760 && tx == 1920 && ty == 0);

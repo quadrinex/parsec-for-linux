@@ -7,13 +7,14 @@
 #include <string.h>
 #include "plh_input.h"
 
-int plh_kwin_outputs(struct plh_output *o, int max)
+/* kscreen-doctor -o text -> outputs. An output counts if it is "enabled", or is a virtual output, which
+ * KWin prints as "disable unsupported" (it cannot be disabled) instead of "enabled". */
+int plh_parse_kscreen(const char *txt, struct plh_output *o, int max)
 {
-    FILE *f = popen("kscreen-doctor -o 2>/dev/null", "r");
-    if (!f) return -1;
-    char line[512];
+    char *copy = strdup(txt), *save = NULL;
+    if (!copy) return -1;
     int n = -1, enabled = 0;
-    while (fgets(line, sizeof line, f)) {
+    for (char *line = strtok_r(copy, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
         /* strip ANSI colour sequences */
         char clean[512]; size_t j = 0;
         for (size_t i = 0; line[i] && j + 1 < sizeof clean; i++) {
@@ -30,14 +31,29 @@ int plh_kwin_outputs(struct plh_output *o, int max)
             enabled = 0;
             sscanf(s, "Output: %*d %31s", o[n].name);
         } else if (n >= 0 && n < max) {
-            if (!strncmp(s, "enabled", 7)) enabled = 1;
+            if (!strncmp(s, "enabled", 7) || !strncmp(s, "disable unsupported", 19)) enabled = 1;
             else if (!strncmp(s, "priority ", 9)) o[n].priority = atoi(s + 9);
             else if (!strncmp(s, "Geometry:", 9)) sscanf(s, "Geometry: %d,%d %dx%d", &o[n].x, &o[n].y, &o[n].w, &o[n].h);
         }
     }
     if (n >= 0 && n < max && enabled && o[n].w > 0) n++;
-    pclose(f);
+    free(copy);
     return n < 0 ? 0 : n;
+}
+
+int plh_kwin_outputs(struct plh_output *o, int max)
+{
+    FILE *f = popen("kscreen-doctor -o 2>/dev/null", "r");
+    if (!f) return -1;
+    size_t cap = 16384, len = 0, r;
+    char *b = malloc(cap);
+    if (!b) { pclose(f); return -1; }
+    while (len + 1 < cap && (r = fread(b + len, 1, cap - len - 1, f)) > 0) len += r;
+    b[len] = 0;
+    pclose(f);
+    int n = plh_parse_kscreen(b, o, max);
+    free(b);
+    return n;
 }
 
 plh_rect plh_outputs_bounds(const struct plh_output *o, int n)

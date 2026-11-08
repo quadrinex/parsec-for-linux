@@ -84,6 +84,7 @@ int plh_evdev_from_name(const char *name);   /* "KEY_F24", "F24", "LEFTSHIFT"...
 struct plh_output { char name[32]; int x, y, w, h; int priority; };
 /* Active outputs from "kscreen-doctor -o"; returns their count (<0 error). */
 int plh_kwin_outputs(struct plh_output *o, int max);
+int plh_parse_kscreen(const char *txt, struct plh_output *o, int max);   /* kscreen-doctor -o text */
 int plh_parse_wlr_randr(const char *txt, struct plh_output *o, int max);
 int plh_parse_xrandr(const char *txt, struct plh_output *o, int max);
 int plh_parse_sway_json(const char *txt, struct plh_output *o, int max);
