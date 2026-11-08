@@ -2,6 +2,8 @@
  * Commands (arguments or stdin, one per line):
  *   abs X Y | rel DX DY | key NAME down|up|tap | sc SCAN [e0] down|up | vk VK [ext] down|up
  *   btn left|right|middle|x1|x2 down|up|click | wheel V120 H120 | sleep MS
+ *   resize X Y W H   recreate the absolute device for a new desktop rect; prints the recreation time
+ *                    and the time until KWin has discovered the new device (the input "gap")
  * Options: --desktop X,Y,WxH (default 0,0,5760x1080), --settle MS (default 800),
  *          --no-flat (do not set the KWin flat acceleration profile on the relative mouse). */
 #define _GNU_SOURCE
@@ -17,13 +19,27 @@ static int updown(const char *s) { return s && (!strcmp(s, "down") || !strcmp(s,
 
 static int run(plh_input *in, char *line)
 {
-    char *v[6] = {0}; int n = 0;
-    for (char *t = strtok(line, " \t\r\n"); t && n < 6; t = strtok(NULL, " \t\r\n")) v[n++] = t;
+    char *v[7] = {0}; int n = 0;
+    for (char *t = strtok(line, " \t\r\n"); t && n < 7; t = strtok(NULL, " \t\r\n")) v[n++] = t;
     if (!n || v[0][0] == '#') return 0;
     int r = -1;
     if (!strcmp(v[0], "abs") && n == 3) r = plh_input_move_abs(in, atoi(v[1]), atoi(v[2]));
     else if (!strcmp(v[0], "rel") && n == 3) r = plh_input_move_rel(in, atoi(v[1]), atoi(v[2]));
     else if (!strcmp(v[0], "wheel") && n == 3) r = plh_input_wheel(in, atoi(v[1]), atoi(v[2]));
+    else if (!strcmp(v[0], "resize") && n == 5) {
+        plh_rect nr = { atoi(v[1]), atoi(v[2]), atoi(v[3]), atoi(v[4]) };
+        struct timespec t0, t1; char k[16], rl[16], a[16], err[128];
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        r = plh_uinput_resize(in, &nr);
+        if (r == 0 && !plh_uinput_evnodes(in, k, rl, a)) {
+            /* wait until KWin exposes the new absolute node on DBus: that is when it can deliver events */
+            int d = plh_kwin_set_flat_accel(a, 3000, err, sizeof err);
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            printf("RESIZE %s create=%ld us kwin-discovered=%s after %ld ms\n", a, plh_uinput_last_resize_us(in), d ? "NO" : "yes",
+                   (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L);
+            fflush(stdout);
+        } else printf("RESIZE result %d\n", r);
+    }
     else if (!strcmp(v[0], "sleep") && n == 2) { msleep(atoi(v[1])); r = 0; }
     else if (!strcmp(v[0], "key") && n == 3) {
         int c = plh_evdev_from_name(v[1]);
