@@ -19,7 +19,7 @@ try:
     from PySide6.QtCore import QPointF, QProcess, QTimer, Qt, QUrl
     from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPen, QPixmap
     from PySide6.QtNetwork import QLocalServer, QLocalSocket
-    from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout,
+    from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout,
                                    QLabel, QMenu, QMessageBox, QPushButton, QSystemTrayIcon, QVBoxLayout)
 except ImportError:
     sys.stderr.write("parsec-tray needs PySide6 (pacman -S pyside6). The host works without it.\n")
@@ -147,10 +147,21 @@ class Settings(QDialog):
         self.checks = {}
         vals = plhconfig.effective()
         for key, (label, _d) in plhconfig.OPTIONS.items():
-            c = QCheckBox(label)
-            c.setChecked(vals[key] == "1")
+            choices = getattr(plhconfig, "CHOICES", {}).get(key)
+            if choices:
+                # A value from the list, not an on/off switch.
+                c = QComboBox()
+                c.addItems(choices if vals[key] in choices else [vals[key], *choices])
+                c.setCurrentText(vals[key])
+                row = QHBoxLayout()
+                row.addWidget(QLabel(label))
+                row.addWidget(c)
+                v.addLayout(row)
+            else:
+                c = QCheckBox(label)
+                c.setChecked(vals[key] == "1")
+                v.addWidget(c)
             self.checks[key] = c
-            v.addWidget(c)
         lay.addWidget(box)
 
         box = QGroupBox("Files")
@@ -198,7 +209,8 @@ class Settings(QDialog):
             self.note.setText("No Parsec log yet.")
 
     def values(self):
-        return {k: "1" if c.isChecked() else "0" for k, c in self.checks.items()}
+        return {k: c.currentText() if isinstance(c, QComboBox) else ("1" if c.isChecked() else "0")
+                for k, c in self.checks.items()}
 
     def save(self):
         try:
