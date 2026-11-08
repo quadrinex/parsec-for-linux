@@ -13,12 +13,12 @@ run() {
   export PLH_CAPTURE_BACKEND=kwin PLH_INPUT_BACKEND=none
   RD=/tmp/plh-capture/rt-vd-f2; rm -rf $RD; mkdir -m 700 -p $RD; export PLH_BRIDGE_DIR=$RD   # private bridge: never the host's runtime dir
   local ok=1
-  for mode in f2 noauto; do
-    if [ $mode = f2 ]; then export PLH_VIRTUAL_DISPLAY=0 PLH_VIRTUAL_DISPLAY_AUTO=1 PLH_FAKE_SCREENS_OFF=1
+  for mode in f2 overlap noauto; do
+    if [ $mode != noauto ]; then export PLH_VIRTUAL_DISPLAY=0 PLH_VIRTUAL_DISPLAY_AUTO=1 PLH_FAKE_SCREENS_OFF=1
     else export PLH_VIRTUAL_DISPLAY=0 PLH_VIRTUAL_DISPLAY_AUTO=0 PLH_FAKE_SCREENS_OFF=1; fi
     build/bridge/plh-bridge --runtime-dir $RD -v > $T/vd-f2.$mode.bridge.log 2>&1 & BP=$!
     for _ in $(seq 50); do [ -S $RD/bridge.sock ] && [ -s $RD/port ] && break; sleep 0.1; done
-    timeout 90 wine $T/vd_probe.exe 2 f2 2>&1 | tr -d '\r' > $T/vd-f2.$mode.out
+    timeout 90 wine $T/vd_probe.exe 2 f2 $([ $mode = overlap ] && echo overlap) 2>&1 | tr -d '\r' > $T/vd-f2.$mode.out
     left=$(xrandr --listmonitors 2>/dev/null | grep -c Virtual-plh)
     kill $BP; wait $BP 2>/dev/null; rm -f $RD/*
     if [ $mode = f2 ]; then
@@ -29,6 +29,11 @@ run() {
       grep -Eq '^FRAMES [1-9]' $T/vd-f2.f2.out || { echo "FAIL f2: no frames"; ok=0; }
       grep -q 'released after the grace period' $T/vd-f2.f2.out || { echo "FAIL f2: no release after grace"; ok=0; }
       [ "$left" = 0 ] || { echo "FAIL f2: virtual output left behind"; ok=0; }
+    elif [ $mode = overlap ]; then   # B created before A is released: A's Release must not clear the redirect
+      awk '/OVERLAP_A_RELEASED/{a=1} /OVERLAP_B_ALIVE/{b=1} /input redirect kept/{if(a&&!b)k=1} /input redirect cleared/{if(!b)early=1; else late++} END{exit !(k&&!early&&late==1)}' $T/vd-f2.overlap.out \
+        || { echo "FAIL overlap: redirect not kept while B lives, or not cleared exactly once after B"; ok=0; }
+      grep -q 'DUP2 hr=0x00000000' $T/vd-f2.overlap.out || { echo "FAIL overlap: second duplication failed"; ok=0; }
+      [ "$left" = 0 ] || { echo "FAIL overlap: virtual output left behind"; ok=0; }
     else
       grep -q 'F2:' $T/vd-f2.noauto.out && { echo "FAIL noauto: F2 triggered with AUTO=0"; ok=0; }
       grep -q 'Virtual-plh' $T/vd-f2.noauto.bridge.log && { echo "FAIL noauto: virtual output created with AUTO=0"; ok=0; }

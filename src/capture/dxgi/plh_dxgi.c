@@ -382,7 +382,10 @@ static IDXGIAdapter *g_adapter;               /* pinned DXVK adapter 0 */
 static IDXGIOutput *g_ph;                     /* pinned placeholder object */
 static struct vd_state { int active; RECT rect; WCHAR name[32]; DWORD hz; int real_listed; } g_vd;  /* guarded by g_lock */
 static LONG g_vout_users;
-static LONG g_grace_gen;
+static ULONGLONG g_grace_deadline;             /* GetTickCount64() after which an idle output may be destroyed */
+static HANDLE g_grace_timer;                  /* one reusable timer-queue timer */
+static int g_destroying;                      /* a VOUT_DESTROY is in flight (sent outside g_lock) */
+static LONG g_redirect_users;                 /* F2 duplications currently holding the input redirect */
 static volatile LONG g_watch_started;
 
 static int is_placeholder(void *o) { return o && o == (void *)g_ph; }
@@ -545,14 +548,16 @@ static DWORD WINAPI vd_watcher(void *p)
 
 static VOID CALLBACK grace_cb(PVOID p, BOOLEAN fired)
 {
-    (void)fired;
+    (void)p; (void)fired;
     glock();
-    if (g_vout_users == 0 && (LONG)(intptr_t)p == g_grace_gen && g_conn) {
-        struct plh_vout_ref ref = { 0, 0 };
-        int r = plh_conn_request(g_conn, PLH_MSG_VOUT_DESTROY, &ref, sizeof ref, NULL, 0, NULL, 3000);
-        plog("virtual output released after the grace period (%d)", r);
-    }
+    if (g_vout_users != 0 || GetTickCount64() < g_grace_deadline || !g_conn || g_destroying) { LeaveCriticalSection(&g_lock); return; }
+    struct plh_conn *c = g_conn;
+    g_destroying = 1;                             /* vout_ref waits for the end of the send */
     LeaveCriticalSection(&g_lock);
+    struct plh_vout_ref ref = { 0, 0 };
+    int r = plh_conn_request(c, PLH_MSG_VOUT_DESTROY, &ref, sizeof ref, NULL, 0, NULL, 3000);
+    plog("virtual output released after the grace period (%d)", r);
+    glock(); g_destroying = 0; LeaveCriticalSection(&g_lock);
 }
 
 static void vout_unref(void)
@@ -560,9 +565,9 @@ static void vout_unref(void)
     glock();
     if (--g_vout_users <= 0) {
         g_vout_users = 0;
-        HANDLE t;
-        g_grace_gen++;
-        CreateTimerQueueTimer(&t, NULL, grace_cb, (PVOID)(intptr_t)g_grace_gen, 3000, 0, WT_EXECUTEONLYONCE);
+        g_grace_deadline = GetTickCount64() + 3000;
+        if (g_grace_timer) ChangeTimerQueueTimer(NULL, g_grace_timer, 3000, 0);
+        else CreateTimerQueueTimer(&g_grace_timer, NULL, grace_cb, NULL, 3000, 0, WT_EXECUTEONLYONCE);
     }
     LeaveCriticalSection(&g_lock);
 }
@@ -575,8 +580,15 @@ static int f2_wanted(struct plh_conn *c)
     return (st.flags & PLH_DS_AUTO) && st.real_on == 0;
 }
 
+/* the redirect is shared: cleared only when the last duplication holding it goes away */
 static void redirect_clear(void)
 {
+    glock();
+    int last = --g_redirect_users <= 0;
+    if (last) g_redirect_users = 0;
+    LeaveCriticalSection(&g_lock);
+    plog("input redirect %s", last ? "cleared (last holder)" : "kept (another duplication holds it)");
+    if (!last) return;
     struct plh_input_redirect_hdr h = { 0, 0 };
     if (g_conn) plh_conn_send(g_conn, PLH_MSG_INPUT_REDIRECT, &h, sizeof h);
 }
@@ -584,14 +596,16 @@ static void redirect_clear(void)
 /* VOUT_CREATE (or join the existing output) and take a reference; reply in *vr */
 static int vout_ref(struct plh_conn *c, struct plh_vout_create_reply *vr, uint32_t w, uint32_t h)
 {
-    glock();
-    g_grace_gen++;                                /* cancels a pending destroy */
-    g_vout_users++;
-    LeaveCriticalSection(&g_lock);
+    for (;;) {                                    /* a pending destroy is cancelled by the user count */
+        glock();
+        if (!g_destroying) { g_vout_users++; LeaveCriticalSection(&g_lock); break; }
+        LeaveCriticalSection(&g_lock);
+        Sleep(10);                                /* let an in-flight VOUT_DESTROY finish first */
+    }
     struct plh_vout_create rq = { w, h, 0, 0 };
     uint32_t n = 0;
     int r = plh_conn_request(c, PLH_MSG_VOUT_CREATE, &rq, sizeof rq, vr, sizeof *vr, &n, 15000);
-    if (r) { plog("VOUT_CREATE failed (%d)", r); vout_unref(); }
+    if (r) { plog("VOUT_CREATE failed (%d)", r); glock(); if (g_vout_users > 0) g_vout_users--; LeaveCriticalSection(&g_lock); }
     return r;
 }
 
@@ -639,7 +653,7 @@ static HRESULT do_duplicate(IDXGIOutput *out, IUnknown *device, const char *vari
         struct { struct plh_input_redirect_hdr h; struct plh_redirect r; } rd = { { 1, 0 }, {
             { od.DesktopCoordinates.left, od.DesktopCoordinates.top, od.DesktopCoordinates.right, od.DesktopCoordinates.bottom },
             { vr.x, vr.y, vr.x + (int32_t)vr.width, vr.y + (int32_t)vr.height } } };
-        if (plh_conn_send(c, PLH_MSG_INPUT_REDIRECT, &rd, sizeof rd) == 0) f2 = 1;
+        if (plh_conn_send(c, PLH_MSG_INPUT_REDIRECT, &rd, sizeof rd) == 0) { f2 = 1; glock(); g_redirect_users++; LeaveCriticalSection(&g_lock); }
         plog("F2: real screens off, %s duplicates the virtual output; input redirect Windows %ld,%ld,%ld,%ld -> KWin %d,%d,%d,%d (sent=%d)",
              variant, rd.r.from.left, rd.r.from.top, rd.r.from.right, rd.r.from.bottom, rd.r.to.left, rd.r.to.top, rd.r.to.right, rd.r.to.bottom, f2);
     } else if (!lst->count || !match_output(out, bo, (int)lst->count, &which, NULL, NULL)) {
@@ -652,7 +666,7 @@ static HRESULT do_duplicate(IDXGIOutput *out, IUnknown *device, const char *vari
         virt = 1;
     }
     struct dup *d = calloc(1, sizeof *d);
-    if (!d) { if (virt) vout_unref(); ID3D11Device_Release(dev); return E_OUTOFMEMORY; }
+    if (!d) { if (f2) redirect_clear(); if (virt) vout_unref(); ID3D11Device_Release(dev); return E_OUTOFMEMORY; }
     d->virt = virt; d->redirect = f2;
     d->iface.lpVtbl = (IDXGIOutputDuplicationVtbl *)&g_dvtbl; d->ref = 1; d->dev = dev;
     InitializeCriticalSection(&d->cs); InitializeConditionVariable(&d->cv);

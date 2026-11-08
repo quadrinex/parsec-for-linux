@@ -57,6 +57,19 @@ int main(int argc, char **argv)
     printf("FRAMES %d\n", frames);
     Sleep(500);
     list(a, "during2", NULL);
+    if (argc > 3) {                                /* overlap: create B, release A, B must keep the redirect */
+        IDXGIOutputDuplication *dup2 = NULL;
+        hr = IDXGIOutput5_DuplicateOutput1(o5, (IUnknown *)dev, 0, 1, &fmt, &dup2);
+        printf("DUP2 hr=0x%08lx\n", hr);
+        IDXGIOutputDuplication_Release(dup);
+        puts("OVERLAP_A_RELEASED");
+        Sleep(1500);
+        puts("OVERLAP_B_ALIVE");
+        if (SUCCEEDED(hr)) IDXGIOutputDuplication_Release(dup2);
+        puts("RELEASED");
+        Sleep(5000);
+        return 0;
+    }
     IDXGIOutputDuplication_Release(dup);
     puts("RELEASED");
     Sleep(1000); list(a, "after1s", NULL);
