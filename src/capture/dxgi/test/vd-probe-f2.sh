@@ -11,16 +11,16 @@ run() {
   bash src/capture/dxgi/install-proxy.sh >/dev/null
   . runtime/env.sh
   export PLH_CAPTURE_BACKEND=kwin PLH_INPUT_BACKEND=none
-  RD=$XDG_RUNTIME_DIR/plh-bridge
+  RD=/tmp/plh-capture/rt-vd-f2; rm -rf $RD; mkdir -m 700 -p $RD; export PLH_BRIDGE_DIR=$RD   # private bridge: never the host's runtime dir
   local ok=1
   for mode in f2 noauto; do
     if [ $mode = f2 ]; then export PLH_VIRTUAL_DISPLAY=0 PLH_VIRTUAL_DISPLAY_AUTO=1 PLH_FAKE_SCREENS_OFF=1
     else export PLH_VIRTUAL_DISPLAY=0 PLH_VIRTUAL_DISPLAY_AUTO=0 PLH_FAKE_SCREENS_OFF=1; fi
-    build/bridge/plh-bridge -v > $T/vd-f2.$mode.bridge.log 2>&1 & BP=$!
+    build/bridge/plh-bridge --runtime-dir $RD -v > $T/vd-f2.$mode.bridge.log 2>&1 & BP=$!
     for _ in $(seq 50); do [ -S $RD/bridge.sock ] && [ -s $RD/port ] && break; sleep 0.1; done
     timeout 90 wine $T/vd_probe.exe 2 f2 2>&1 | tr -d '\r' > $T/vd-f2.$mode.out
     left=$(xrandr --listmonitors 2>/dev/null | grep -c Virtual-plh)
-    kill $BP; wait $BP 2>/dev/null
+    kill $BP; wait $BP 2>/dev/null; rm -f $RD/*
     if [ $mode = f2 ]; then
       grep -q 'F2: real screens off' $T/vd-f2.f2.out || { echo "FAIL f2: no F2 decision"; ok=0; }
       grep -q 'input redirect Windows 0,0,1920,1080 -> KWin' $T/vd-f2.f2.out || { echo "FAIL f2: no redirect for the default output"; ok=0; }
@@ -35,6 +35,7 @@ run() {
       grep -q 'output \(DP\|HDMI\)' $T/vd-f2.noauto.bridge.log || { echo "FAIL noauto: the real output was not used"; ok=0; }
     fi
   done
+  unset PLH_BRIDGE_DIR; rm -rf $RD
   bin/parsec-linux-host start >/dev/null 2>&1
   [ $ok = 1 ] && echo "PASS F2 screens off -> virtual output + redirect (and AUTO=0 leaves the real output)" || { echo "FAIL (see $T/vd-f2.*)"; return 1; }
 }

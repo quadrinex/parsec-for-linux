@@ -12,12 +12,12 @@ run() {
   bash src/capture/dxgi/install-proxy.sh >/dev/null
   . runtime/env.sh
   export PLH_VIRTUAL_DISPLAY=1 PLH_CAPTURE_BACKEND=kwin PLH_INPUT_BACKEND=none
-  RD=$XDG_RUNTIME_DIR/plh-bridge
-  build/bridge/plh-bridge -v > $T/vd-probe.bridge.log 2>&1 & BP=$!
+  RD=/tmp/plh-capture/rt-vd-probe; rm -rf $RD; mkdir -m 700 -p $RD; export PLH_BRIDGE_DIR=$RD   # private bridge: never the host's runtime dir
+  build/bridge/plh-bridge --runtime-dir $RD -v > $T/vd-probe.bridge.log 2>&1 & BP=$!
   for _ in $(seq 50); do [ -S $RD/bridge.sock ] && [ -s $RD/port ] && break; sleep 0.1; done
   timeout 90 wine $T/vd_probe.exe 4 2>&1 | tr -d '\r' > $T/vd-probe.out
   left=$(xrandr --listmonitors 2>/dev/null | grep -c Virtual-plh)
-  kill $BP; wait $BP 2>/dev/null
+  kill $BP; wait $BP 2>/dev/null; unset PLH_BRIDGE_DIR; rm -rf $RD
   bin/parsec-linux-host start >/dev/null 2>&1
   local ok=1
   grep -q '^COUNT before dxgi=4 wine_monitors=3' $T/vd-probe.out || { echo "FAIL placeholder not listed as 4th output before"; ok=0; }
