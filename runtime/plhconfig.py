@@ -96,6 +96,8 @@ def write(updates, path=None):
     for k, v in updates.items():
         if not re.fullmatch(r"\w+", k) or re.search(r'[\n"}$`\\]', str(v)):
             raise ValueError(f"unsafe setting {k!r}")
+        if k in CHOICES and not valid_mode(v):
+            raise ValueError(f"invalid value for {k}: {v!r}")
     try:
         lines = path.read_text().splitlines()
     except OSError:

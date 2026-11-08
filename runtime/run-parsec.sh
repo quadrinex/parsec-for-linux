@@ -38,11 +38,14 @@ export DXVK_LOG_PATH="$PLH_TRACES" DXVK_LOG_LEVEL="${DXVK_LOG_LEVEL:-info}"
 
 # dxgi proxy (idempotent) + plh-bridge daemon (KWin capture) if not running.
 ROOT_PLH="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT_PLH/runtime/bridge-pid.sh"
 if [ -f "$ROOT_PLH/build/dxgi/dxgi.dll" ]; then "$ROOT_PLH/src/capture/dxgi/install-proxy.sh" >/dev/null; fi
 [ "$D3DT" = 1 ] && export PLH_D3D_TRACE=1
 if [ "$FULL" = 1 ]; then
     # the bridge must be (re)started with the input backend; otherwise leave it as is
-    pgrep -x plh-bridge >/dev/null && { pkill -x plh-bridge || true; sleep 1; }
+    plh_host_bridge_stop
+    plh_stray_bridges | while read -r p; do echo "run-parsec: stopping stray bridge $p (uses the host directory without --runtime-dir)" >&2; kill "$p" 2>/dev/null || true; done
+    sleep 1
     if [ "${PLH_ENABLE_INPUT:-1}" = 1 ]; then
         export PLH_INPUT_BACKEND="${PLH_INPUT_BACKEND:-uinput}"
     else
@@ -54,11 +57,13 @@ if [ "$FULL" = 1 ]; then
         rm -f "$WINEPREFIX/drive_c/windows/system32/amfrt64.dll"
     fi
 fi
-if [ -x "$ROOT_PLH/build/bridge/plh-bridge" ] && ! pgrep -x plh-bridge >/dev/null; then
+if [ -x "$ROOT_PLH/build/bridge/plh-bridge" ] && ! plh_host_bridge_pid >/dev/null; then
+    for _p in $(plh_stray_bridges); do echo "run-parsec: WARNING stray bridge $_p holds the host directory; stopping it" >&2; kill "$_p" 2>/dev/null || true; sleep 1; done
     BRIDGE_ARGS=(--capture-backend "${PLH_CAPTURE_BACKEND:-kwin}")
     [ "${PLH_BRIDGE_VERBOSE:-0}" = 1 ] && BRIDGE_ARGS+=(-v)
     [ -n "${PLH_BRIDGE_PORT:-}" ] && [ "${PLH_BRIDGE_PORT:-0}" != 0 ] && BRIDGE_ARGS+=(--port "$PLH_BRIDGE_PORT")
     nohup "$ROOT_PLH/build/bridge/plh-bridge" "${BRIDGE_ARGS[@]}" >"$PLH_TRACES/plh-bridge.log" 2>&1 &
+    plh_host_bridge_record $!
     sleep 1
 fi
 if [ "$FULL" = 1 ]; then
