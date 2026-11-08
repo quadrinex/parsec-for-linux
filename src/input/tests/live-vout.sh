@@ -9,6 +9,11 @@ exec 8>/tmp/plh-input.lock
 flock -w 120 8 || { echo "Bail out! /tmp/plh-input.lock unavailable"; exit 1; }
 exec 7>/tmp/plh-vout.lock
 flock -w 180 7 || { echo "Bail out! /tmp/plh-vout.lock unavailable"; exit 1; }
+exec 6>/tmp/plh-host.lock
+flock -w 300 6 || { echo "Bail out! /tmp/plh-host.lock unavailable"; exit 1; }
+# every child (python, ctl, probe, host restart and the wineserver it spawns) runs with the lock fds closed,
+# otherwise a long-lived child keeps a lock held after the test (incident: wineserver held fd 7)
+CL='6>&- 7>&- 8>&-'
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../../.." && pwd)
 ctl=$root/build/input/plh-input-ctl; probe=$root/build/bridge/vout-probe
@@ -17,11 +22,18 @@ n=0; fails=0
 ok()  { n=$((n+1)); echo "ok $n - $*"; }
 nok() { n=$((n+1)); fails=$((fails+1)); echo "not ok $n - $*"; }
 bail() { echo "Bail out! $*"; cleanup; exit 1; }
+hoststopped=0
 cleanup() {
   exec 9>&-
   [ "${ppid_:-0}" -gt 0 ] && kill "$ppid_" 2>/dev/null
   [ "${twpid:-0}" -gt 0 ] && kill "$twpid" 2>/dev/null
+  [ "${ctlpid:-0}" -gt 0 ] && kill "$ctlpid" 2>/dev/null
   wait 2>/dev/null
+  flock -u 6; flock -u 7; flock -u 8
+  if [ "$hoststopped" = 1 ]; then
+    hoststopped=0
+    "$root/bin/parsec-linux-host" start >/dev/null 2>&1 6>&- 7>&- 8>&- 9>&-
+  fi
   return 0
 }
 
@@ -30,13 +42,15 @@ kdesk() { kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk '/Geom
   x=p[1];y=p[2];w=s[1];h=s[2]; if(!i||x<mx)mx=x; if(!i||y<my)my=y; if(!i||x+w>Mx)Mx=x+w; if(!i||y+h>My)My=y+h; i=1}
   END{print mx,my,Mx-mx,My-my}'; }
 vgeom() { kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk '/^Output:/{v=($0 ~ /plh-virtual/)} v&&/Geometry:/{split($2,p,",");split($3,s,"x");print p[1],p[2],s[1],s[2]}'; }
+# the host's plh-input-hook must not inject while we measure: stop the host (restored by cleanup)
+"$root/bin/parsec-linux-host" stop >/dev/null 2>&1 6>&- 7>&- 8>&-; hoststopped=1; sleep 2
 xrandr --listmonitors 2>/dev/null | grep -q 'Virtual-plh' && bail "a Virtual-plh output exists (another experiment?)"
 for _ in $(seq 60); do [ -z "$(vgeom)" ] && break; sleep 1; done   # another teammate may be using it
 vgeom0=$(vgeom); [ -z "$vgeom0" ] || bail "a virtual output already exists"
 read -r DX DY DW DH < <(kdesk); echo "# live desktop $DX,$DY ${DW}x$DH"
 orig=$("$here/kwin-cursor-pos.sh")
 
-python3 "$here/testwin.py" --timeout 60 > "$d/tw.log" 2>&1 & twpid=$!
+python3 "$here/testwin.py" --timeout 60 > "$d/tw.log" 2>&1 6>&- 7>&- 8>&- & twpid=$!
 for _ in $(seq 60); do grep -q READY "$d/tw.log" 2>/dev/null && break; sleep 0.1; done
 sleep 0.3
 read -r WX WY WW WH WACT < <("$here/kwin-window-geom.sh" "PLH input test window")
@@ -45,15 +59,27 @@ CX=$((WX + WW/2)); CY=$((WY + WH/2))
 [ "$CX" -ge $((DX+50)) ] && [ "$CX" -le $((DX+DW-51)) ] || bail "test window too close to an edge"
 
 mkfifo "$d/vctl.fifo" 2>/dev/null || { rm -f "$d/vctl.fifo"; mkfifo "$d/vctl.fifo"; }
-"$ctl" --desktop "$DX,$DY,${DW}x$DH" --settle 700 < "$d/vctl.fifo" > "$d/vctl.out" 2>&1 & ctlpid=$!
+"$ctl" --desktop "$DX,$DY,${DW}x$DH" --settle 700 < "$d/vctl.fifo" > "$d/vctl.out" 2>&1 6>&- 7>&- 8>&- & ctlpid=$!
 exec 9> "$d/vctl.fifo"
 send() { echo "$*" >&9; }
 active() { [ "$(grep -E '^(READY|INACTIVE)$' "$d/tw.log" | tail -1)" = READY ]; }
-# abs X Y then check KWin's cursor; up to 3 tries (a human mouse move between inject and read is a false negative)
-expect_abs() { local x=$1 y=$2 msg=$3 p=""
-  for _ in 1 2 3; do send "abs $x $y"; sleep 0.45; p=$(curpos); [ "$p" = "$x $y" ] && { ok "$msg ($p)"; return; }; done
-  nok "$msg: got '$p' want '$x $y'"; }
+# Interference detection: the pointer is read before and after each injection. A pointer that is not where our last
+# injection left it, or that drifts between two reads with no injection, is foreign motion (human mouse, other
+# injector). Up to 3 tries; a final mismatch with foreign motion seen is reported as SKIP "interference",
+# a stable wrong position with no foreign motion stays a real FAIL.
 curpos() { "$here/kwin-cursor-pos.sh"; }
+lastpos=""; interf=0
+expect_abs() { local x=$1 y=$2 msg=$3 p="" p2="" pre="" foreign=0
+  for _ in 1 2 3; do
+    pre=$(curpos)
+    [ -n "$lastpos" ] && [ "$pre" != "$lastpos" ] && foreign=1
+    send "abs $x $y"; sleep 0.45; p=$(curpos); sleep 0.25; p2=$(curpos)
+    [ "$p" != "$p2" ] && foreign=1
+    lastpos=$p2
+    [ "$p" = "$x $y" ] && [ "$p2" = "$p" ] && { ok "$msg ($p)"; return; }
+  done
+  if [ "$foreign" = 1 ]; then interf=$((interf+1)); n=$((n+1)); echo "ok $n - $msg # SKIP interference: foreign pointer motion (got '$p2' want '$x $y')"
+  else nok "$msg: got '$p2' want '$x $y' (stable, no foreign motion seen)"; fi; }
 
 # --- probe click in our own window: abort without further injection if not received
 sleep 1.2
@@ -65,7 +91,7 @@ send "btn left click"; sleep 0.6
 grep -q '^BTN down 1' "$d/tw.log" && ok "probe click received in our window" || bail "probe click NOT received: abort"
 
 # --- virtual output appears
-"$probe" -t 14 > "$d/probe.out" 2>&1 & ppid_=$!
+"$probe" -t 14 > "$d/probe.out" 2>&1 6>&- 7>&- 8>&- & ppid_=$!
 for _ in $(seq 100); do [ -n "$(vgeom)" ] && break; sleep 0.1; done
 # KWin first shows the output at 0,0 for a moment, then places it: wait for a stable geometry
 prev=""; for _ in $(seq 40); do cur="$(vgeom) $(kdesk)"; [ "$cur" = "$prev" ] && break; prev="$cur"; sleep 0.6; done
@@ -98,5 +124,10 @@ active && { send "abs $CX $CY"; sleep 0.4; send "btn left click"; sleep 0.5; [ "
 send "abs $orig"; sleep 0.3
 cleanup
 echo "# cursor restored: $orig -> $(curpos)"
+[ "$interf" -gt 0 ] && echo "# $interf step(s) skipped for interference"
+# no lock may stay held by a leaked child (wineserver, bridge, daemons)
+for l in vout input host; do
+  ( flock -n 3 ) 3>/tmp/plh-$l.lock && ok "lock /tmp/plh-$l.lock released and not leaked" || nok "lock /tmp/plh-$l.lock still held by a leaked fd: $(fuser /tmp/plh-$l.lock 2>&1 | tr -s ' ')"
+done
 echo "1..$n"
 exit $((fails != 0))

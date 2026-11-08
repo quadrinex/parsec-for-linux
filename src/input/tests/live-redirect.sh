@@ -25,7 +25,7 @@ cleanup() {
   rm -rf "${RD:-/nonexistent-plh}"
   unset PLH_BRIDGE_DIR
   flock -u 6; flock -u 8; flock -u 7      # drop locks before the host start so its daemons do not need them
-  bin/parsec-linux-host start >/dev/null 2>&1
+  bin/parsec-linux-host start >/dev/null 2>&1 6>&- 7>&- 8>&- 9>&-
   return 0
 }
 bail() { echo "Bail out! $*"; cleanup; exit 1; }
@@ -47,17 +47,17 @@ here=$R/src/input/tests
 curpos() { "$here/kwin-cursor-pos.sh"; }
 
 # private bridge, host stopped (so the proxy talks to it); never the host's runtime dir
-bin/parsec-linux-host stop >/dev/null 2>&1; sleep 2
-bash src/capture/dxgi/install-proxy.sh >/dev/null
+bin/parsec-linux-host stop >/dev/null 2>&1 6>&- 7>&- 8>&-; sleep 2
+bash src/capture/dxgi/install-proxy.sh >/dev/null 6>&- 7>&- 8>&-
 . runtime/env.sh
 RD=$d/rt-redirect; rm -rf $RD; mkdir -m 700 -p $RD
 export PLH_CAPTURE_BACKEND=kwin PLH_INPUT_BACKEND=uinput PLH_BRIDGE_DIR=$RD
 export PLH_VIRTUAL_DISPLAY=0 PLH_VIRTUAL_DISPLAY_AUTO=1 PLH_FAKE_SCREENS_OFF=1
-build/bridge/plh-bridge --runtime-dir $RD -v > $d/redirect.bridge.log 2>&1 & bridge_pid=$!
+build/bridge/plh-bridge --runtime-dir $RD -v > $d/redirect.bridge.log 2>&1 6>&- 7>&- 8>&- & bridge_pid=$!
 for _ in $(seq 50); do [ -S $RD/bridge.sock ] && [ -s $RD/port ] && break; sleep 0.1; done
 grep -q 'service input: active' $d/redirect.bridge.log || bail "input service not active in the private bridge"
 
-python3 "$here/testwin.py" --timeout 90 > "$d/tw.log" 2>&1 & twpid=$!
+python3 "$here/testwin.py" --timeout 90 > "$d/tw.log" 2>&1 6>&- 7>&- 8>&- & twpid=$!
 for _ in $(seq 60); do grep -q READY "$d/tw.log" 2>/dev/null && break; sleep 0.1; done
 sleep 0.3
 read -r WX WY WW WH WACT < <("$here/kwin-window-geom.sh" "PLH input test window")
@@ -67,7 +67,7 @@ CX=$((WX + WW/2)); CY=$((WY + WH/2))
 active() { [ "$(grep -E '^(READY|INACTIVE)$' "$d/tw.log" | tail -1)" = READY ]; }
 
 mkfifo $d/inj.fifo 2>/dev/null || { rm -f $d/inj.fifo; mkfifo $d/inj.fifo; }
-build/input/plh-bridge-inject < $d/inj.fifo > $d/inj.out 2>&1 & injpid=$!
+build/input/plh-bridge-inject < $d/inj.fifo > $d/inj.out 2>&1 6>&- 7>&- 8>&- & injpid=$!
 exec 9> $d/inj.fifo
 send() { echo "$*" >&9; }
 sleep 1.5      # let KWin discover the bridge's new uinput devices
@@ -88,7 +88,7 @@ grep -q '^BTN down 1' "$d/tw.log" && ok "probe click received in our window (thr
 expect_abs 960 540 $((960+PX)) $((540+PY)) "before F2: Windows 960,540 -> real screen (translation only)"
 
 # F2: the proxy duplicates the default output -> virtual output + redirect
-timeout 80 wine $d/vd_probe.exe 22 f2 2>&1 | tr -d '\r' > $d/redirect.probe.out & probe_pid=$!
+timeout 80 wine $d/vd_probe.exe 22 f2 2>&1 6>&- 7>&- 8>&- | tr -d '\r' > $d/redirect.probe.out & probe_pid=$!
 for _ in $(seq 150); do [ -n "$(vgeom)" ] && grep -q 'redirect entries' $d/redirect.bridge.log && break; sleep 0.2; done
 prev=""; for _ in $(seq 40); do cur="$(vgeom) $(kdesk)"; [ "$cur" = "$prev" ] && break; prev="$cur"; sleep 0.6; done
 read -r VX VY VW VH < <(vgeom)
@@ -112,5 +112,8 @@ expect_abs 960 540 $((960+PX)) $((540+PY)) "after release: Windows 960,540 -> re
 send "abs $((${orig% *}-PX)) $((${orig#* }-PY))"; sleep 0.3
 cleanup
 echo "# cursor restored: $orig -> $(curpos)"
+for l in vout input host; do
+  ( flock -n 3 ) 3>/tmp/plh-$l.lock && ok "lock /tmp/plh-$l.lock not leaked" || nok "lock /tmp/plh-$l.lock leaked: $(fuser /tmp/plh-$l.lock 2>&1 | tr -s ' ')"
+done
 echo "1..$n"
 exit $((fails != 0))
