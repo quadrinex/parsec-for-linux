@@ -304,8 +304,11 @@ if [ "${PLH_TEST_INTRUSIVE:-0}" = 1 ]; then
   # The helpers may leave test options in the host's environment: end with a clean restart (config.env options only).
   ( exec 8>/tmp/plh-host.lock; flock -w 120 8 || exit 1
     env -u PLH_BRIDGE_DIR -u PLH_VIRTUAL_DISPLAY -u PLH_VIRTUAL_DISPLAY_AUTO -u PLH_FAKE_SCREENS_OFF -u PLH_CAPTURE_BACKEND -u PLH_INPUT_BACKEND \
-      "$HOST" restart >"$D/final-restart.log" 2>&1 </dev/null 8>&- ) || fail "final clean host restart failed (host lock busy?)"
+      "$HOST" restart >"$D/final-restart.log" 2>&1 </dev/null 8>&- 9>&- ) || fail "final clean host restart failed (host lock busy?)"
   sleep 12
+  # no daemon may inherit our lock (a leaked /tmp/plh-vout.lock fd blocks every later test)
+  holders=$(for f in /proc/[0-9]*/fd/*; do [ "$(readlink "$f" 2>/dev/null)" = /tmp/plh-vout.lock ] && echo "${f#/proc/}"; done 2>/dev/null | cut -d/ -f1 | grep -vx "$$" | sort -u | tr '\n' ' ')
+  [ -z "$holders" ] || fail "processes hold /tmp/plh-vout.lock open after the live cases (leaked fd): $holders"
   tr '\0' '\n' </proc/"$(pgrep -x plh-bridge | head -1)"/environ 2>/dev/null | grep -E '^PLH_(VIRTUAL_DISPLAY|FAKE_SCREENS_OFF|BRIDGE_DIR)=' | grep -v '=0$' \
     && fail "the host bridge was left with test options in its environment (see lines above)"
   st=$("$HOST" status 2>&1); echo "$st" | grep -q '^plh-bridge *running' || fail "host not restored after the live cases: $(echo "$st" | tr '\n' ' ')"
