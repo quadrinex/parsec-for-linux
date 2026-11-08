@@ -37,7 +37,8 @@ static void parse_mode(uint32_t *w, uint32_t *h, uint32_t *r)
         hh = (unsigned)((unsigned long long)hh * PLH_VOUT_MAX_WIDTH / ww) & ~1u;
         ww = PLH_VOUT_MAX_WIDTH;
     }
-    *w = ww; *h = hh; *r = rr * 1000;
+    if (hh > PLH_VOUT_MAX_HEIGHT) hh = PLH_VOUT_MAX_HEIGHT;
+    *w = ww & ~1u; *h = hh & ~1u; *r = rr * 1000;
 }
 
 static int find_virtual(struct plh_vout_create_reply *r)
@@ -81,9 +82,17 @@ static int create(struct plh_client *c, const struct plh_vout_create *rq, struct
         uint32_t w, h, r;
         parse_mode(&w, &h, &r);
         if (rq->width && rq->height) {
-            w = rq->width > PLH_VOUT_MAX_WIDTH ? PLH_VOUT_MAX_WIDTH : rq->width; h = rq->height;
-            if (w < 320 || h < 200 || h > 8192) return PLH_E_INVAL;
+            w = rq->width; h = rq->height;
+            if (w < 320 || h < 200 || w > 16384 || h > 16384) return PLH_E_INVAL;
         }
+        /* encoder limits: H.264 hardware max 4096x2304, even sizes only (odd NV12 textures reset the GPU) */
+        uint32_t w0 = w, h0 = h;
+        if (w > PLH_VOUT_MAX_WIDTH) w = PLH_VOUT_MAX_WIDTH;
+        if (h > PLH_VOUT_MAX_HEIGHT) h = PLH_VOUT_MAX_HEIGHT;
+        w &= ~1u; h &= ~1u;
+        if (w < 320 || h < 200) return PLH_E_INVAL;
+        if (w != w0 || h != h0) PLH_WARN(MOD, "virtual output size %ux%u adjusted to %ux%u (even, max %ux%u)", w0, h0, w, h,
+                                          PLH_VOUT_MAX_WIDTH, PLH_VOUT_MAX_HEIGHT);
         memset(&cur, 0, sizeof cur);
         int rc = cap_kwin_vout_start(PLH_VOUT_NAME, PLH_VOUT_DESCRIPTION, w, h, lost);
         if (rc) return rc;

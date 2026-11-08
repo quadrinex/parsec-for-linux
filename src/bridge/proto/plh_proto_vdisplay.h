@@ -24,6 +24,7 @@
 #define PLH_VOUT_NAME        "plh-virtual"                       /* KWin shows "Virtual-plh-virtual" */
 #define PLH_VOUT_DESCRIPTION "Virtual display (parsec-for-linux)"
 #define PLH_VOUT_MAX_WIDTH   4096
+#define PLH_VOUT_MAX_HEIGHT  2304 /* sizes are rounded down to even and clamped (encoder limit) */
 
 struct plh_vout_create {
     uint32_t width, height;      /* 0 = configured mode (PLH_VIRTUAL_DISPLAY_MODE); width capped at 4096 */
