@@ -383,7 +383,7 @@ static IDXGIOutput *g_ph;                     /* pinned placeholder object */
 static struct vd_state { int active; RECT rect; WCHAR name[32]; DWORD hz; int real_listed; } g_vd;  /* guarded by g_lock */
 static LONG g_vout_users;
 static ULONGLONG g_grace_deadline;             /* GetTickCount64() after which an idle output may be destroyed */
-static HANDLE g_grace_timer;                  /* one reusable timer-queue timer */
+static int g_grace_armed;                      /* an idle output is waiting for its grace deadline */
 static int g_destroying;                      /* a VOUT_DESTROY is in flight (sent outside g_lock) */
 static LONG g_redirect_users;                 /* F2 duplications currently holding the input redirect */
 static volatile LONG g_watch_started;
@@ -546,18 +546,35 @@ static DWORD WINAPI vd_watcher(void *p)
     return 0;
 }
 
-static VOID CALLBACK grace_cb(PVOID p, BOOLEAN fired)
+/* Dedicated grace thread (no timer queue: re-arming a fired one-shot timer proved unreliable under
+ * Wine). It sleeps on an event with a timeout computed from g_grace_deadline and re-evaluates. */
+static HANDLE g_grace_evt;
+static DWORD WINAPI grace_thread(LPVOID p)
 {
-    (void)p; (void)fired;
-    glock();
-    if (g_vout_users != 0 || GetTickCount64() < g_grace_deadline || !g_conn || g_destroying) { LeaveCriticalSection(&g_lock); return; }
-    struct plh_conn *c = g_conn;
-    g_destroying = 1;                             /* vout_ref waits for the end of the send */
-    LeaveCriticalSection(&g_lock);
-    struct plh_vout_ref ref = { 0, 0 };
-    int r = plh_conn_request(c, PLH_MSG_VOUT_DESTROY, &ref, sizeof ref, NULL, 0, NULL, 3000);
-    plog("virtual output released after the grace period (%d)", r);
-    glock(); g_destroying = 0; LeaveCriticalSection(&g_lock);
+    (void)p;
+    for (;;) {
+        DWORD wait = INFINITE;
+        glock();
+        if (g_grace_armed && g_vout_users == 0 && !g_destroying) {
+            ULONGLONG now = GetTickCount64();
+            if (now >= g_grace_deadline) {
+                struct plh_conn *c = g_conn;
+                g_grace_armed = 0;
+                if (c) {
+                    g_destroying = 1;             /* vout_ref waits for the end of the send */
+                    LeaveCriticalSection(&g_lock);
+                    struct plh_vout_ref ref = { 0, 0 };
+                    int r = plh_conn_request(c, PLH_MSG_VOUT_DESTROY, &ref, sizeof ref, NULL, 0, NULL, 3000);
+                    plog("virtual output released after the grace period (%d)", r);
+                    glock(); g_destroying = 0; LeaveCriticalSection(&g_lock);
+                    continue;
+                }
+            } else wait = (DWORD)(g_grace_deadline - now) + 1;
+        }
+        LeaveCriticalSection(&g_lock);
+        WaitForSingleObject(g_grace_evt, wait);
+    }
+    return 0;
 }
 
 static void vout_unref(void)
@@ -566,8 +583,13 @@ static void vout_unref(void)
     if (--g_vout_users <= 0) {
         g_vout_users = 0;
         g_grace_deadline = GetTickCount64() + 3000;
-        if (g_grace_timer) ChangeTimerQueueTimer(NULL, g_grace_timer, 3000, 0);
-        else CreateTimerQueueTimer(&g_grace_timer, NULL, grace_cb, NULL, 3000, 0, WT_EXECUTEONLYONCE);
+        g_grace_armed = 1;
+        if (!g_grace_evt) {
+            g_grace_evt = CreateEventW(NULL, FALSE, FALSE, NULL);
+            HANDLE t = g_grace_evt ? CreateThread(NULL, 0, grace_thread, NULL, 0, NULL) : NULL;
+            if (t) CloseHandle(t); else plog("grace thread start failed (%lu)", GetLastError());
+        }
+        if (g_grace_evt) SetEvent(g_grace_evt);
     }
     LeaveCriticalSection(&g_lock);
 }

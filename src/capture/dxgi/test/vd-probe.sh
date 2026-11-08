@@ -11,15 +11,29 @@ run() {
   bin/parsec-linux-host stop >/dev/null 2>&1; sleep 2
   bash src/capture/dxgi/install-proxy.sh >/dev/null
   . runtime/env.sh
-  export PLH_VIRTUAL_DISPLAY=1 PLH_CAPTURE_BACKEND=kwin PLH_INPUT_BACKEND=none
-  RD=/tmp/plh-capture/rt-vd-probe; rm -rf $RD; mkdir -m 700 -p $RD; export PLH_BRIDGE_DIR=$RD   # private bridge: never the host's runtime dir
-  build/bridge/plh-bridge --runtime-dir $RD -v > $T/vd-probe.bridge.log 2>&1 & BP=$!
+  # test env scoped to the private bridge and probe commands only (never exported into this shell, never into the host)
+  RD=/tmp/plh-capture/rt-vd-probe; rm -rf $RD; mkdir -m 700 -p $RD
+  local TENV="PLH_VIRTUAL_DISPLAY=1 PLH_CAPTURE_BACKEND=kwin PLH_INPUT_BACKEND=none PLH_BRIDGE_DIR=$RD"
+  env $TENV build/bridge/plh-bridge --runtime-dir $RD -v > $T/vd-probe.bridge.log 2>&1 & BP=$!
   for _ in $(seq 50); do [ -S $RD/bridge.sock ] && [ -s $RD/port ] && break; sleep 0.1; done
-  timeout 90 wine $T/vd_probe.exe 4 2>&1 | tr -d '\r' > $T/vd-probe.out
+  env $TENV timeout 90 wine $T/vd_probe.exe 4 2>&1 | tr -d '\r' > $T/vd-probe.out
   left=$(xrandr --listmonitors 2>/dev/null | grep -c Virtual-plh)
-  kill $BP; wait $BP 2>/dev/null; unset PLH_BRIDGE_DIR; rm -rf $RD
-  bin/parsec-linux-host start >/dev/null 2>&1
+  # R5: second release must also be followed by its own grace destroy (release, re-dup in grace, hold 4.5 s, release, wait)
+  rm -f $T/vd-probe.regrace.out; : > $T/vd-probe.regrace.samples
+  env $TENV timeout 90 wine $T/vd_probe.exe 2 f2 regrace 2>&1 | tr -d '\r' | while IFS= read -r l; do
+    echo "$l" >> $T/vd-probe.regrace.out
+    case $l in "SAMPLE "*) echo "${l#SAMPLE }=$(xrandr --listmonitors 2>/dev/null | grep -c Virtual-plh)" >> $T/vd-probe.regrace.samples;; esac
+  done
+  kill $BP; wait $BP 2>/dev/null; rm -rf $RD
+  env -u PLH_BRIDGE_DIR -u PLH_VIRTUAL_DISPLAY -u PLH_VIRTUAL_DISPLAY_AUTO -u PLH_FAKE_SCREENS_OFF -u PLH_CAPTURE_BACKEND -u PLH_INPUT_BACKEND \
+    bin/parsec-linux-host start >/dev/null 2>&1
   local ok=1
+  grep -q '^held_after_first_deadline=1' $T/vd-probe.regrace.samples || { echo "FAIL regrace: output not alive while held past the first deadline"; ok=0; }
+  grep -q '^after_second_grace=0' $T/vd-probe.regrace.samples || { echo "FAIL regrace (R5): output still present 5.5 s after the second release"; ok=0; }
+  [ "$(grep -c 'released after the grace period' $T/vd-probe.regrace.out)" = 1 ] || { echo "FAIL regrace (R5): expected exactly one grace release in the proxy log"; ok=0; }
+  # env leak check: the host bridge must carry none of the test variables
+  . runtime/bridge-pid.sh; sleep 1
+  hp=$(plh_host_bridge_pid) && { tr '\0' '\n' < /proc/$hp/environ | grep -E '^PLH_(BRIDGE_DIR|VIRTUAL_DISPLAY|VIRTUAL_DISPLAY_AUTO|FAKE_SCREENS_OFF)=' && { echo "FAIL host bridge inherited test env"; ok=0; }; } || { echo "FAIL host bridge not running after restart"; ok=0; }
   grep -q '^COUNT before dxgi=4 wine_monitors=3' $T/vd-probe.out || { echo "FAIL placeholder not listed as 4th output before"; ok=0; }
   grep -q '^OUT before 3 .*DISPLAY4 ' $T/vd-probe.out || ok=0
   grep -q '^DUP hr=0x00000000' $T/vd-probe.out || { echo "FAIL DuplicateOutput1 on the placeholder"; ok=0; }
@@ -29,5 +43,4 @@ run() {
   [ "$left" = 0 ] || { echo "FAIL virtual output left behind"; ok=0; }
   [ $ok = 1 ] && echo "PASS F1 placeholder -> virtual output -> frames -> release -> gone" || { echo "FAIL (see $T/vd-probe.out)"; return 1; }
 }
-export -f run; export T
 flock -w 400 -o /tmp/plh-vout.lock flock -w 300 -o /tmp/plh-host.lock bash -c 'cd "'"$R"'"; export T='"$T"'; '"$(declare -f run)"'; run'

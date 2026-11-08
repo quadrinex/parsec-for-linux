@@ -1,3 +1,4 @@
+#include <string.h>
 /* vd_probe.c — F1 probe (owner: capture): lists the DXGI outputs, duplicates the "Virtual display" placeholder, receives
  * frames, releases, and watches the output set change. Run in the dedicated prefix with the proxy installed.
  * usage: vd_probe [seconds_to_hold [f2]]   (f2: duplicate output 0, the "default" screen, instead of the placeholder)   prints PH/OUT/FRAMES lines. */
@@ -57,6 +58,24 @@ int main(int argc, char **argv)
     printf("FRAMES %d\n", frames);
     Sleep(500);
     list(a, "during2", NULL);
+    if (argc > 3 && !strcmp(argv[3], "regrace")) { /* R5: release, re-dup inside the grace, hold past the first deadline, release, wait */
+        IDXGIOutputDuplication *d2 = NULL;
+        IDXGIOutputDuplication_Release(dup); puts("RELEASED1");
+        Sleep(1500);
+        hr = IDXGIOutput5_DuplicateOutput1(o5, (IUnknown *)dev, 0, 1, &fmt, &d2);
+        printf("DUP2 hr=0x%08lx\n", hr);
+        if (FAILED(hr)) return 3;
+        for (int t = 0; t < 45; t++) {
+            DXGI_OUTDUPL_FRAME_INFO fi; IDXGIResource *res = NULL;
+            if (IDXGIOutputDuplication_AcquireNextFrame(d2, 100, &fi, &res) == S_OK) { IDXGIResource_Release(res); IDXGIOutputDuplication_ReleaseFrame(d2); }
+        }
+        puts("SAMPLE held_after_first_deadline");
+        IDXGIOutputDuplication_Release(d2); puts("RELEASED2");
+        Sleep(5500);
+        puts("SAMPLE after_second_grace");
+        Sleep(300);
+        return 0;
+    }
     if (argc > 3) {                                /* overlap: create B, release A, B must keep the redirect */
         IDXGIOutputDuplication *dup2 = NULL;
         hr = IDXGIOutput5_DuplicateOutput1(o5, (IUnknown *)dev, 0, 1, &fmt, &dup2);
