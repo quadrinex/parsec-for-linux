@@ -272,11 +272,11 @@ else
   echo "$o" | grep -q "max=$((base+1))" || { echo "4d: Wine never listed the real output (max adapters != $((base+1))): $o"; exit 1; }
   echo "  # 4d ok: control: Wine itself lists the real output ($nm) while it exists, so 4b really crossed the transition"
   ) ; rc=$?
-  "$WINESERVER" -k 2>/dev/null || true
+  ( wine_env; WINEPREFIX="$D/pfx" "${WINESERVER:-wineserver}" -k ) 2>/dev/null || true
   [ $rc = 0 ] || fail "4: placeholder case failed (see lines above)"
   wait_gone || fail "4: output left behind"
 fi
-note_skip "5 duplicate -> frames -> release + 3 s grace -> gone: dxgi side (DuplicateOutput on the placeholder) not delivered"
+note_skip "5 duplicate placeholder -> frames -> release + 3 s grace -> gone (capture vd_probe in the live prefix): needs the host restarted with PLH_VIRTUAL_DISPLAY=1 and the proxy installed; not automated yet (lead to confirm the host-restart window)"
 note_skip "6b F2 behaviour (duplicate default output yields virtual frames + redirect): dxgi side not delivered; only the state flag (6a) is tested"
 if [ "${PLH_TEST_INTRUSIVE:-0}" = 1 ]; then
   note_skip "7 input on the virtual output (flock /tmp/plh-input.lock, 50 px from LIVE edges): redirect/uinput resize not delivered"
