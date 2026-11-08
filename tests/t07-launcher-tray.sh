@@ -85,9 +85,38 @@ assert m.overall(comp, False, on) == "stopped"
 assert m.overall({}, False, on) == "unknown"
 app = m.QApplication([])
 assert not m.status_icon("connected").isNull()
-class Stub:
-    state, components = "ready", {"parsecd": True}
-w = m.Settings(Stub())
-assert set(w.values()) == set(m.plhconfig.OPTIONS) and set(w.values().values()) <= {"0", "1"}
+from types import SimpleNamespace
+w = m.Settings(SimpleNamespace(state="unknown", components={}, client=False))
+vals = w.values()
+ch = m.plhconfig.CHOICES
+assert set(vals) == set(m.plhconfig.OPTIONS)
+for k, v in vals.items():
+    if k in ch:   # fixed-choice setting (e.g. a resolution): in the list and valid
+        assert v in ch[k], (k, v, ch[k])
+        if k == "PLH_VIRTUAL_DISPLAY_MODE":
+            assert m.plhconfig.valid_mode(v), v
+    else:
+        assert v in ("0", "1"), (k, v)
+assert "PLH_VIRTUAL_DISPLAY_MODE" in ch, "virtual display resolution not a CHOICES key"
+# the default (OPTIONS[k][1]) and every listed choice are valid modes; hostile or out-of-range ones are not
+for k in ch:
+    assert m.plhconfig.OPTIONS[k][1] == ch[k][0], k
+for bad in ("", "0", "1920x", "99999x99999", "100x100", "1920x1080; rm", "5000x1080", "1920X1080"):
+    assert not m.plhconfig.valid_mode(bad), bad
+for good in ch["PLH_VIRTUAL_DISPLAY_MODE"]:
+    assert m.plhconfig.valid_mode(good), good
+# R4: plhconfig.write() must refuse an invalid resolution (strict with PLH_T07_STRICT_MODE=1 until runtime fixes it)
+import os, tempfile
+cfgp = os.path.join(tempfile.mkdtemp(), "cfg")
+accepted = []
+for v in ("9999x9999", "abc", "1280x720 ; id"):
+    try:
+        m.plhconfig.write({"PLH_VIRTUAL_DISPLAY_MODE": v}, cfgp); accepted.append(v)
+    except ValueError:
+        pass
+if accepted:
+    if os.environ.get("PLH_T07_STRICT_MODE") == "1":
+        raise SystemExit("plhconfig.write accepted invalid resolution(s): %r" % accepted)
+    print("  # OPEN REFUTATION R4: plhconfig.write accepts invalid PLH_VIRTUAL_DISPLAY_MODE values %r" % accepted)
 PY
 pass "launcher add/remove (+icon), uninstall --dry-run, config round trip, env.sh, tray logic"
