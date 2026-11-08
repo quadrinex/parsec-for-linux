@@ -14,6 +14,15 @@ uint32_t cap_stable_id(const char *name);
 
 struct cap_stream;
 
+/* virtual output (backend_kwin.c anchor stream, vout.c logic) */
+int  cap_kwin_vout_start(const char *name, const char *desc, uint32_t w, uint32_t h, void (*lost)(void));
+void cap_kwin_vout_stop(void);
+int  cap_kwin_vout_alive(void);
+void cap_vout_handle(struct plh_client *c, const struct plh_msg_hdr *h, const void *p);
+void cap_vout_client_gone(struct plh_client *c);
+void cap_vout_fini(void);
+#define CAP_VOUT_CONNECTOR "Virtual-" PLH_VOUT_NAME
+
 struct cap_backend_ops {
     const char *name;
     uint32_t    id; /* enum plh_cap_backend */

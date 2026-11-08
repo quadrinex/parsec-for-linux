@@ -176,3 +176,55 @@ static void kwin_stop(struct cap_stream *s)
 }
 
 const struct cap_backend_ops cap_backend_kwin = { "kwin", PLH_CAP_BACKEND_KWIN, kwin_start, kwin_stop };
+
+/* ---- virtual output anchor: one stream_virtual_output without a PipeWire consumer. KWin ties the output to the
+ * stream: closing the stream (or the death of this process) removes the output. Capture streams on it are
+ * ordinary zkde stream_output streams on its wl_output. */
+static struct zkde_screencast_stream_unstable_v1 *vst;
+static void (*vout_lost_cb)(void);
+
+static void v_closed(void *d, struct zkde_screencast_stream_unstable_v1 *st)
+{
+    (void)d;
+    PLH_WARN(MOD, "KWin closed the virtual output stream");
+    if (st == vst) { zkde_screencast_stream_unstable_v1_destroy(st); vst = NULL; if (vout_lost_cb) vout_lost_cb(); }
+}
+static void v_created(void *d, struct zkde_screencast_stream_unstable_v1 *st, uint32_t n)
+{ (void)d; (void)st; PLH_INFO(MOD, "virtual output stream: node %u", n); }
+static void v_failed(void *d, struct zkde_screencast_stream_unstable_v1 *st, const char *e)
+{
+    (void)d;
+    PLH_ERR(MOD, "KWin refuses the virtual output: %s", e);
+    if (st == vst) { zkde_screencast_stream_unstable_v1_destroy(st); vst = NULL; if (vout_lost_cb) vout_lost_cb(); }
+}
+static void v_serial(void *d, struct zkde_screencast_stream_unstable_v1 *st, uint32_t hi, uint32_t lo)
+{ (void)d; (void)st; (void)hi; (void)lo; }
+static const struct zkde_screencast_stream_unstable_v1_listener v_l = { v_closed, v_created, v_failed, v_serial };
+
+int cap_kwin_vout_start(const char *name, const char *desc, uint32_t w, uint32_t h, void (*lost)(void))
+{
+    int r = ensure_wl();
+    if (r) return r;
+    if (vst) return PLH_E_BUSY;
+    vout_lost_cb = lost;
+    if (sc_version >= 4)
+        vst = zkde_screencast_unstable_v1_stream_virtual_output_with_description(sc, name, desc, (int32_t)w, (int32_t)h,
+                wl_fixed_from_int(1), ZKDE_SCREENCAST_UNSTABLE_V1_POINTER_METADATA);
+    else if (sc_version >= 2)
+        vst = zkde_screencast_unstable_v1_stream_virtual_output(sc, name, (int32_t)w, (int32_t)h, wl_fixed_from_int(1),
+                ZKDE_SCREENCAST_UNSTABLE_V1_POINTER_METADATA);
+    else
+        return PLH_E_UNKNOWN;
+    zkde_screencast_stream_unstable_v1_add_listener(vst, &v_l, NULL);
+    wl_display_flush(dpy);
+    return PLH_OK;
+}
+
+void cap_kwin_vout_stop(void)
+{
+    if (!vst) return;
+    zkde_screencast_stream_unstable_v1_close(vst);   /* destructor request: frees the proxy */
+    vst = NULL;
+    if (dpy) wl_display_flush(dpy);
+}
+int cap_kwin_vout_alive(void) { return vst != NULL; }

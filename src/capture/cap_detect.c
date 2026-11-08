@@ -52,8 +52,13 @@ int cap_detect_order(const struct cap_backend_ops **order, int max)
 
 int cap_outputs_query(struct plh_cap_output *out, int max)
 {
-    if (!strcmp(session_kind(), "x11")) return cap_outputs_query_x11(out, max);
-    int n = cap_outputs_query_wl(out, max);
-    if (n < 0 && getenv("DISPLAY")) n = cap_outputs_query_x11(out, max);
+    int n;
+    if (!strcmp(session_kind(), "x11")) n = cap_outputs_query_x11(out, max);
+    else {
+        n = cap_outputs_query_wl(out, max);
+        if (n < 0 && getenv("DISPLAY")) n = cap_outputs_query_x11(out, max);
+    }
+    for (int i = 0; i < n; i++)
+        if (!strcmp(out[i].name, CAP_VOUT_CONNECTOR)) out[i].flags |= PLH_CAP_OUTPUT_VIRTUAL;
     return n;
 }

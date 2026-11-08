@@ -263,6 +263,11 @@ static void handle(struct plh_client *c, const struct plh_msg_hdr *h, const void
         plh_reply(c, h, &st, sizeof st);
         break;
     }
+    case PLH_MSG_VOUT_CREATE:
+    case PLH_MSG_VOUT_DESTROY:
+    case PLH_MSG_DISPLAY_STATE:
+        cap_vout_handle(c, h, p);
+        break;
     default:
         if (h->seq) plh_reply_error(c, h, PLH_E_UNKNOWN, "type 0x%04x", h->type);
     }
@@ -270,6 +275,7 @@ static void handle(struct plh_client *c, const struct plh_msg_hdr *h, const void
 
 static void client_gone(struct plh_client *c)
 {
+    cap_vout_client_gone(c);
     struct cap_stream *s = streams;
     while (s) {
         struct cap_stream *n = s->next;
@@ -281,6 +287,7 @@ static void client_gone(struct plh_client *c)
 static void fini(void)
 {
     while (streams) stream_close(streams);
+    cap_vout_fini();
 }
 
 static const struct plh_service cap_service = {

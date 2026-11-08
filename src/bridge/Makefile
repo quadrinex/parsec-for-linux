@@ -26,7 +26,7 @@ vpath %.xml $(sort $(dir $(addprefix $(ROOT)/,$(SERVICE_WL_PROTOCOLS))))
 CLIENT := $(ROOT)/src/bridge/client/plh_client.c
 HDRS := $(wildcard $(ROOT)/src/bridge/*.h $(ROOT)/src/bridge/proto/*.h $(ROOT)/src/bridge/client/*.h $(ROOT)/src/*/cap_internal.h)
 
-all: $(B)/plh-bridge $(B)/plh-captest $(B)/plh-captest.exe $(B)/proto-sizes $(B)/proto-sizes.exe $(B)/afunix-probe.exe $(B)/vout-probe dxgi-proxy
+all: $(B)/plh-bridge $(B)/plh-captest $(B)/plh-captest.exe $(B)/proto-sizes $(B)/proto-sizes.exe $(B)/afunix-probe.exe $(B)/vout-probe $(B)/plh-vout-test dxgi-proxy
 
 dxgi-proxy:
 	$(MAKE) -C $(ROOT)/src/capture/dxgi ROOT=$(ROOT)
@@ -50,6 +50,10 @@ $(B)/vout-probe: $(ROOT)/src/capture/tools/vout-probe.c $(B)/gen/zkde-screencast
 $(B)/plh-captest: $(ROOT)/src/capture/tools/plh-captest.c $(CLIENT) $(HDRS)
 	@mkdir -p $(B)
 	$(CC) $(CFLAGS) -o $@ $(ROOT)/src/capture/tools/plh-captest.c $(CLIENT) -lpthread
+
+$(B)/plh-vout-test: $(ROOT)/src/capture/tools/plh-vout-test.c $(CLIENT) $(HDRS)
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -o $@ $(ROOT)/src/capture/tools/plh-vout-test.c $(CLIENT) -lpthread
 
 $(B)/plh-captest.exe: $(ROOT)/src/capture/tools/plh-captest.c $(CLIENT) $(HDRS)
 	@mkdir -p $(B)
