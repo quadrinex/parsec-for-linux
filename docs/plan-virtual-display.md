@@ -30,6 +30,11 @@ Status: **plan only**. Nothing below is implemented or proven. Every step ends w
 | S4 | capture | How to tell "screens off": DPMS state per output (`org_kde_kwin_dpms` or `kscreen-doctor --dpms show`), DisplayPort hotplug (the output disappears), zero outputs at all (do XWayland and Wine survive?). A monitor turned off with its button over HDMI usually keeps its EDID and sends no event: probably **undetectable**, to be confirmed and then documented. | F2 trigger. |
 | S5 | eclaireur | Can Wine pick up a new XWayland output live (patch 0006 in winex11, its Unix part now built like ntdll.so)? Optional: it would also fix the half-screen offset bug for real, but plan B does not depend on it. | Whether `layout-watch` can be retired later. |
 
+## Spike results so far
+
+- **S2 (capture, `src/capture/SPIKES-S2-S4.md`), proven:** the output appears as `Virtual-plh-virtual` in `kscreen-doctor` and in XWayland's `xrandr` (`+5760+0`, right of the rightmost screen, 60 Hz mode); it is removed when the stream closes and about 1.5 s after a SIGKILL; 2560x1440 works. Frames are damage-driven (an idle output sends a few frames, then none). KWin **does** write it into `kwinoutputconfig.json` (ROLLBACK line 9, `uninstall.sh` step [9]). Not measured: fps under load, waking DPMS-off screens.
+- **S4, proven:** `kscreen-doctor --dpms show` gives the DPMS state per screen; `/sys/class/drm/*/status` is readable without privileges. Inferred: a DP screen switched off disappears, an HDMI screen switched off with its button stays. Zero outputs: not tested.
+
 ## Design (plan B, adjusted after the spikes)
 
 ### Bridge protocol (`src/bridge/proto/`, announced to everyone)

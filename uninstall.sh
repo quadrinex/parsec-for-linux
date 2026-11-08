@@ -24,6 +24,38 @@ run pkill -f 'bin/parsec-tra[y]' || true
 BASE_PKGS="$HERE/backups/pkglist-all-20261030-072800.txt"
 was_installed() { [ -f "$BASE_PKGS" ] && grep -q "^$1 " "$BASE_PKGS"; }
 
+# [9] KWin's saved output config (kwinoutputconfig.json) after a virtual output named plh-*.
+# With the baseline in backups/: put back the slot as it was and drop only the setups added since.
+# Without it: drop the setups that use the slot. Slots are kept either way (setups index them).
+KWIN_OUT="${PLH_KWIN_OUTPUT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/kwinoutputconfig.json}"
+KWIN_BASE="$HERE/backups/kwinoutputconfig.before-vout-spike.json"
+if [ -f "$KWIN_OUT" ] && grep -q '"Virtual-plh' "$KWIN_OUT"; then
+  echo "+ undo the Virtual-plh* output entries in $KWIN_OUT"
+  [ "$DRY" = 1 ] || python3 - "$KWIN_OUT" "$KWIN_BASE" <<'PY'
+import json, os, sys
+path, base_path = sys.argv[1], sys.argv[2]
+sec = lambda d, n: next((s["data"] for s in d if s.get("name") == n), [])
+key = lambda x: json.dumps(x, sort_keys=True)
+data = json.load(open(path))
+base = json.load(open(base_path)) if os.path.isfile(base_path) else None
+outs = sec(data, "outputs")
+ours = {i for i, o in enumerate(outs) if str(o.get("connectorName", "")).startswith("Virtual-plh")}
+old_setups = {key(st) for st in sec(base, "setups")} if base else set()
+if base:
+    bouts = sec(base, "outputs")
+    for i in ours:
+        if i < len(bouts) and bouts[i].get("uuid") == outs[i].get("uuid"):
+            outs[i] = bouts[i]
+for s in data:
+    if s.get("name") == "setups":
+        s["data"] = [st for st in s["data"] if key(st) in old_setups
+                     or not any(o.get("outputIndex") in ours for o in st.get("outputs", []))]
+tmp = path + ".plh-tmp"
+with open(tmp, "w") as f:
+    json.dump(data, f, indent=4)
+os.replace(tmp, path)
+PY
+fi
 # [8] tray unit, settings saved outside the repository  ([6] and [8] units are removed by `disable`)
 run rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/parsec-for-linux/config.env"
 # [7] application menu entry and icon
