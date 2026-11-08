@@ -1,6 +1,6 @@
 # Plan: virtual display (not built)
 
-Status: **plan only**. Nothing below is implemented or proven. Every step ends with the test that proves it.
+Status: **spikes done, build started 2026-11-08** (D-020). Only what a test proves is done. Every step ends with the test that proves it.
 
 ## What the user wants
 
@@ -36,7 +36,7 @@ Status: **plan only**. Nothing below is implemented or proven. Every step ends w
 - **S4, proven:** `kscreen-doctor --dpms show` gives the DPMS state per screen; `/sys/class/drm/*/status` is readable without privileges. Inferred: a DP screen switched off disappears, an HDMI screen switched off with its button stays. Zero outputs: not tested.
 - **S3 (entrees, `src/input/pe/absprobe.c`), proven** in a throwaway prefix whose own LL hook swallowed every event: `SendInput` absolute points far outside Wine's virtual screen reach an LL hook unclamped, so a placeholder rect right of Wine's desktop works and F1 needs **no redirect table** (placeholder at Windows x=3840 + translation 1920 = KWin x=5760). A uinput abs device recreated with a larger range is registered by KWin; that KWin scales it to the grown desktop is inferred. Choice: recreate the abs device (`plh_uinput_resize`, only while no button is down) when the virtual output comes and goes. The redirect table (F2 only) goes in `bridge_input.c` `apply()`; `layout.c` must refresh `desk` on a layout change and skip `plh-virtual` in the translation search.
 - **S5 (eclaireur, `runtime/tools/displaywatch/s5-live-test.sh`), proven:** Wine follows the virtual output **live** with no patch: a 4th monitor `DISPLAY4` at Windows 3840,0 appears while the output exists and goes away after. No `WM_DISPLAYCHANGE` reaches top-level windows (Wine sends it to the desktop window only), so anything that cached the layout must poll or watch the desktop window. Consequences for the design: the placeholder must sit exactly where the real output will appear (right of the rightmost screen) and be **dropped from the list once Wine reports the real monitor**, so the output never shows twice; `match_output()` must accept that output; `layout.c` must refresh its desktop rect. The old "half-screen offset" bug is then more likely on our side (cached layout in the input path) than in Wine: worth re-checking.
-- **S1 (eclaireur), partial:** Parsec creates about 45 DXGI factories per second during a session (it re-enumerates by itself), uses `SendInput` and `ClipCursor(NULL)` only, and loads cfgmgr32 on its virtual display path. Still unknown, waiting for the human's traced connection (`runtime/trace-display-list.sh`): whether the client's display list comes from DXGI alone, what precedes `MM_Connect`, what happens at a display switch.
+- **S1, done** (traced connection with one display switch, `runtime/trace-display-list.sh`; calls attributed to modules by return address). Parsec's own module calls `EnumDisplayDevicesW` and `EnumDisplaySettingsW` on `\\.\DISPLAY1..3` (about 770 each in 30 s: it polls), `MonitorFromWindow`/`GetMonitorInfoW`/`GetDpiForMonitor` (its own window), `SetupDi*` lookups, and at each encoder start `QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS)` (now succeeds), `DisplayConfigGetDeviceInfo`, then `SetDisplayConfig(3 paths, 6 modes, SDC_APPLY|SDC_USE_SUPPLIED_DISPLAY_CONFIG|SDC_ALLOW_CHANGES)` re-applying the current layout (returns 0). DXVK does the rest (`EnumDisplayMonitors`, `QueryDisplayConfig`, `SetupDi*`). Input: `SendInput`, `ClipCursor(NULL)`. **Consequence: the placeholder must exist in user32 too** (`EnumDisplayDevicesW` and `EnumDisplaySettingsW` for its device name), not only in DXGI. Parsec did not try its own virtual display in this session; on 2026-11-03 it did, right after `QueryDisplayConfig` failed. Inferred: Parsec falls back to its virtual display only when it finds no screen. Not seen: `ChangeDisplaySettingsEx` ("match client resolution" was not tried).
 - Lock rule: `flock` must be used with `-o` so daemons started inside do not inherit the lock.
 
 ## Design (plan B, adjusted after the spikes)
@@ -52,6 +52,10 @@ Status: **plan only**. Nothing below is implemented or proven. Every step ends w
 - At most one virtual output; size from the config (default 1920x1080@60), then from the client resolution if S1 shows a usable signal. Width capped at 4096 for H.264 (encodeur's limit).
 - Name `plh-virtual`, description "Virtual display (parsec-for-linux)".
 
+### eclaireur (`runtime/patches/wine/`)
+- Patch 0006 in user32 (rebuildable, next to 0005): while the placeholder is offered and the real virtual output does not exist yet, `EnumDisplayDevicesW`/`EnumDisplaySettingsW[Ex]` answer for its device name with one 60 Hz mode, using the rect the bridge publishes (registry key in the prefix, like the monitor names). Once Wine lists the real output, the patch steps aside.
+- Check that `SetDisplayConfig` with 4 paths (virtual output present) still returns 0 and changes nothing.
+
 ### capture, `dxgi.dll` proxy (`src/capture/dxgi/`)
 - Wrap `IDXGIAdapter::EnumOutputs` to append a placeholder output when the option is on. Its `GetDesc` gives a rect right of Wine's desktop (or whatever S3 allows) and a device name after the last real one; the monitor name "Virtual display" goes through patch 0005's registry key.
 - `DuplicateOutput[1]` on the placeholder → `VOUT_CREATE`, then the normal stream path; `Release` → grace timer → `VOUT_DESTROY`.
@@ -64,7 +68,7 @@ Status: **plan only**. Nothing below is implemented or proven. Every step ends w
 
 ### lead (`bin/`, config, tray)
 - `layout-watch` ignores outputs named `plh-virtual` (in the comparison and in the saved snapshot), otherwise creating the virtual screen would restart the host.
-- Two settings in `plhconfig` and the tray's settings window, both on by default, like Parsec's own host options: "Offer a virtual display" and "Use a virtual display when the screens are off", plus the resolution.
+- Two settings in `plhconfig` and the tray's settings window, **off until `t40` passes**, then on by default, like Parsec's own host options: "Offer a virtual display" and "Use a virtual display when the screens are off", plus the resolution.
 - `status` shows the virtual output when it exists.
 - README, PROGRESS, compat-matrix (KWin only at first; GNOME/wlroots have no equivalent protocol in use here: "not tested / not supported").
 
