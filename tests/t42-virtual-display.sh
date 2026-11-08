@@ -147,16 +147,16 @@ if [ -x "$VT" ] && [ -x "$BR" ]; then
   O1=; O2=; BP=
   trap cleanup_br EXIT
 
-  # 2a. offer disabled: REFUTATION R3 (open): VOUT_CREATE ignores PLH_VIRTUAL_DISPLAY (src/capture/vout.c cap_vout_handle).
-  # Strict only with PLH_T42_STRICT_OFFER=1 until capture decides whether create must be refused when the offer is off.
-  PLH_VIRTUAL_DISPLAY=0 start_br || fail "2a: private bridge did not start: $(tail -3 "$RD/log")"
+  # 2a. both options off -> VOUT_CREATE refused, nothing created (R3, fixed by capture a0b85ee); AUTO alone is enough to allow it
+  PLH_VIRTUAL_DISPLAY=0 PLH_VIRTUAL_DISPLAY_AUTO=0 start_br || fail "2a: private bridge did not start: $(tail -3 "$RD/log")"
   if vt create -t 1 >"$D/2a.out" 2>&1; then rc=0; else rc=$?; fi
-  if [ "$(vcount_kd)" != 0 ] || [ "$rc" = 0 ]; then
-    if [ "${PLH_T42_STRICT_OFFER:-0}" = 1 ]; then fail "2a: create succeeded with PLH_VIRTUAL_DISPLAY=0"; fi
-    info "2a OPEN REFUTATION R3: create succeeds with PLH_VIRTUAL_DISPLAY=0 (offer flag is advisory only)"
-    wait_gone || fail "2a: output left behind"
-  else info "2a ok: offer disabled -> create refused (rc=$rc)"; fi
+  [ "$(vcount_kd)" = 0 ] || fail "2a: virtual output created although both options are off"
+  [ "$rc" != 0 ] || fail "2a: create reported success with both options off: $(head -2 "$D/2a.out" | tr '\n' ' ')"
   stop_br
+  PLH_VIRTUAL_DISPLAY=0 PLH_VIRTUAL_DISPLAY_AUTO=1 start_br || fail "2a: restart (AUTO) failed"
+  vt create -t 1 >"$D/2a2.out" 2>&1 || fail "2a: create refused with PLH_VIRTUAL_DISPLAY_AUTO=1: $(tail -2 "$D/2a2.out")"
+  wait_gone || fail "2a: output left behind"
+  stop_br; info "2a ok: both off -> refused (rc=$rc, nothing created); AUTO alone -> allowed"
 
   PLH_VIRTUAL_DISPLAY=1 start_br || fail "2: private bridge did not start"
   # 2b. two owners: output stays until the LAST owner is gone; never two outputs
@@ -210,7 +210,7 @@ if [ -x "$VT" ] && [ -x "$BR" ]; then
   rm -f "$RD/bridge.sock" "$RD/port"
 
   # 2g. SIGTERM of the bridge removes it too
-  start_br || fail "2g: restart failed"
+  PLH_VIRTUAL_DISPLAY=1 start_br || fail "2g: restart failed"
   ( exec env PLH_BRIDGE_DIR=$RD "$VT" create -k >"$D/2g.out" 2>&1 ) & O1=$!
   wait_ready "$D/2g.out" || fail "2g: no READY"
   kill -TERM "$BP"; wait "$BP" 2>/dev/null
@@ -228,8 +228,55 @@ if [ -x "$VT" ] && [ -x "$BR" ]; then
 else
   note_skip "2 bridge VOUT: build/bridge/plh-vout-test or plh-bridge missing (make -C src/bridge)"
 fi
-note_skip "4 placeholder in EnumOutputs and user32 EnumDisplayDevicesW/EnumDisplaySettingsW (probe exe): dxgi placeholder and patch 0006 not delivered"
-note_skip "5 duplicate -> frames -> release + 3 s grace -> gone; never listed twice: needs 4"
+# --- 4. user32 placeholder (patch 0006) in a THROWAWAY prefix, with the real displaylist probe
+DL="$BUILD/pe/displaylist.exe"
+if [ ! -f "$DL" ]; then note_skip "4 placeholder in user32: $DL not built (mingw missing?)"
+elif ! ( wine_env; command -v "$WINE" >/dev/null ); then note_skip "4 placeholder in user32: wine not found"
+else
+  (
+  wine_env
+  export WINEPREFIX="$D/pfx" WINEDLLOVERRIDES=winemenubuilder.exe=d
+  trap '"${WINESERVER:-wineserver}" -k 2>/dev/null' EXIT
+  K='HKLM\Software\Wine\PlhVirtualDisplay'
+  dl() { timeout 60 "$WINE" "$DL" "$@" 2>&1 | tr -d '\r'; }
+  base=$(dl | sed -n 's/^snap n=\([0-9]*\).*/\1/p')
+  [ "${base:-0}" -ge 1 ] || { echo "4: probe got no adapter list"; exit 1; }
+  # Windows x of the future output = right edge of the rightmost real adapter
+  edge=$(dl | grep '^snap' | grep -o '@[-0-9]*,[0-9]*:[0-9]*x' | awk -F'[@,:x]' '{e=$2+$4; if(e>m)m=e} END{print m+0}')
+  nm="\\\\.\\DISPLAY$((base+1))"
+  reg() { "$WINE" reg add "$K" /v "$1" /t "$2" /d "$3" /f >/dev/null; }
+  reg DeviceName REG_SZ "$nm"; reg Left REG_DWORD "$edge"; reg Top REG_DWORD 0; reg Width REG_DWORD 1920; reg Height REG_DWORD 1080; reg Active REG_DWORD 0
+  # trans <tag>: poll in a message-pumping probe for 16 s; the real output exists from t=5 s to t=~14 s
+  trans() { dl 16 >"$D/$1.dl" & local dp=$!; sleep 5; "$VP" -t 9 -n plh-virtual >"$D/$1.vp" 2>&1; wait "$dp"; o=$(cat "$D/$1.dl"); }
+  # 4a. placeholder offered: exactly one extra adapter, right of the real ones, name = the real output's future name
+  o=$(dl); n=$(echo "$o" | sed -n 's/^snap n=\([0-9]*\).*/\1/p')
+  [ "$n" = $((base+1)) ] || { echo "4a: expected $((base+1)) adapters with the placeholder, got $n: $o"; exit 1; }
+  echo "$o" | grep -qF "$nm@$edge,0:1920x1080" || { echo "4a: placeholder not at $edge,0 1920x1080 under $nm: $o"; exit 1; }
+  echo "  # 4a ok: placeholder = $nm at $edge,0 (adapters $base -> $n)"
+  # 4b. the real output appears while polling: never two entries for the same name/position at any instant
+  trans 4b
+  echo "$o" | grep -q '^dup=0' || { echo "4b: DUPLICATE display seen while the real output appeared: $o"; exit 1; }
+  last=$(echo "$o" | grep '^snap' | tail -1)
+  echo "$o" | grep -q "snap n=$((base+1))" || { echo "4b: adapter count never reached $((base+1)) with the real output: $o"; exit 1; }
+  echo "  # 4b ok: no duplicate across the placeholder -> real -> placeholder transitions (identical list before/after is expected: the placeholder sits exactly where Wine puts the real output)"
+  # 4c. step aside / key removed: back to the plain list
+  reg Active REG_DWORD 1
+  n=$(dl | sed -n 's/^snap n=\([0-9]*\).*/\1/p')
+  [ "$n" = "$base" ] || { echo "4c: Active=1 must restore $base adapters, got $n"; exit 1; }
+  "$WINE" reg delete "$K" /f >/dev/null 2>&1
+  n=$(dl | sed -n 's/^snap n=\([0-9]*\).*/\1/p')
+  [ "$n" = "$base" ] || { echo "4c: key removed must give $base adapters, got $n"; exit 1; }
+  echo "  # 4c ok: Active=1 and key removal restore the plain list"
+  # 4d. control for 4b: with NO key, Wine alone must list the real output (else 4b proved nothing about the transition)
+  trans 4d
+  echo "$o" | grep -q "max=$((base+1))" || { echo "4d: Wine never listed the real output (max adapters != $((base+1))): $o"; exit 1; }
+  echo "  # 4d ok: control: Wine itself lists the real output ($nm) while it exists, so 4b really crossed the transition"
+  ) ; rc=$?
+  "$WINESERVER" -k 2>/dev/null || true
+  [ $rc = 0 ] || fail "4: placeholder case failed (see lines above)"
+  wait_gone || fail "4: output left behind"
+fi
+note_skip "5 duplicate -> frames -> release + 3 s grace -> gone: dxgi side (DuplicateOutput on the placeholder) not delivered"
 note_skip "6b F2 behaviour (duplicate default output yields virtual frames + redirect): dxgi side not delivered; only the state flag (6a) is tested"
 if [ "${PLH_TEST_INTRUSIVE:-0}" = 1 ]; then
   note_skip "7 input on the virtual output (flock /tmp/plh-input.lock, 50 px from LIVE edges): redirect/uinput resize not delivered"
