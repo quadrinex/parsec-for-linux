@@ -35,6 +35,12 @@ int main(void)
     plh_rect w5[1] = { {0,0,1920,1080} };
     CHECK(plh_layout_translation(w5, 1, 0, k5, 2, &tx, &ty) == 0 && tx == 0);
 
+    /* KWin moves the primary (e.g. a screen is added on the left): client translation follows */
+    { int ctx = 1920, cty = 0;
+      plh_translation_shift(&ctx, &cty, 1920, 0, 3840, 0); CHECK(ctx == 3840 && cty == 0);
+      plh_translation_shift(&ctx, &cty, 3840, 0, 1920, 0); CHECK(ctx == 1920);
+      plh_translation_shift(&ctx, &cty, 1920, 0, 1920, 0); CHECK(ctx == 1920); }
+
     /* redirect mapping */
     struct plh_redir r[2] = { { {0,0,1920,1080}, {5760,0,1920,1080} }, { {100,100,100,100}, {0,0,200,200} } };
     int kx, ky;

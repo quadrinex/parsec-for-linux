@@ -103,6 +103,9 @@ int plh_output_is_virtual(const char *name);
 /* Desktop bounding rect (all outputs, virtual included) + default translation (real primary). 0 ok. */
 int plh_layout_snapshot(const struct plh_output *k, int nk, plh_rect *desk, int *tx, int *ty);
 
+/* The KWin primary moved from old_d to new_d: the Windows->KWin translation moves by the same delta. */
+void plh_translation_shift(int *tx, int *ty, int old_dx, int old_dy, int new_dx, int new_dy);
+
 /* Redirect table: a Windows rect shown on another KWin rect (virtual output). */
 struct plh_redir { plh_rect from, to; };
 /* Maps a Windows point through the first entry containing it (scaled); 1 mapped, 0 no entry. */

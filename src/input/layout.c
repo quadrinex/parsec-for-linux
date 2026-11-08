@@ -70,6 +70,12 @@ int plh_layout_snapshot(const struct plh_output *k, int nk, plh_rect *desk, int 
     return -1;
 }
 
+void plh_translation_shift(int *tx, int *ty, int old_dx, int old_dy, int new_dx, int new_dy)
+{
+    *tx += new_dx - old_dx;
+    *ty += new_dy - old_dy;
+}
+
 int plh_redirect_map(const struct plh_redir *r, int n, int wx, int wy, int *kx, int *ky)
 {
     for (int i = 0; i < n; i++) {

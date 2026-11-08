@@ -28,6 +28,7 @@ static int mouse_rel_mode;
 struct icli {
     struct plh_redir redir[MAX_REDIR];   /* Windows rect -> KWin rect, released with the client */
     int nredir;
+    struct icli *next;            /* all clients, to shift tx/ty when the KWin origin moves */
     int tx, ty;                   /* KWin = Windows + T, for this client */
     unsigned char keys[KEY_CNT / 8 + 1];
     unsigned char btns;
@@ -35,6 +36,7 @@ struct icli {
 };
 
 static int nclients;
+static struct icli *clients;
 static int refresh_timer = -1;
 
 /* Re-read the KWin layout: desktop rect (virtual output included), default translation, uinput
@@ -49,6 +51,12 @@ static int refresh_layout(void)
     plh_rect d; int tx, ty;
     if (plh_layout_snapshot(o, n, &d, &tx, &ty)) return 0;
     memcpy(outs, o, sizeof o); nouts = n;
+    if (tx != def_tx || ty != def_ty) {
+        /* KWin moved the primary output: every client's Windows primary stays on the same output,
+         * so its translation moves by the same delta. */
+        for (struct icli *c = clients; c; c = c->next) plh_translation_shift(&c->tx, &c->ty, def_tx, def_ty, tx, ty);
+        PLH_INFO(MOD, "default translation %+d,%+d -> %+d,%+d (client translations shifted)", def_tx, def_ty, tx, ty);
+    }
     def_tx = tx; def_ty = ty;
     if (!memcmp(&d, &desk, sizeof d)) return 0;
     PLH_INFO(MOD, "desktop %d,%d %dx%d -> %d,%d %dx%d", desk.x, desk.y, desk.w, desk.h, d.x, d.y, d.w, d.h);
@@ -72,6 +80,7 @@ static struct icli *cli_state(struct plh_client *c)
         if (!s) return NULL;
         if (nclients == 0) refresh_layout();
         nclients++;
+        s->next = clients; clients = s;
         s->tx = def_tx; s->ty = def_ty;
         plh_client_set_data(c, PLH_SVC_INPUT, s);
     }
@@ -241,6 +250,8 @@ static void client_gone(struct plh_client *c)
     if (!s) return;
     release_all(s);
     drop_pads(s);
+    for (struct icli **pp = &clients; *pp; pp = &(*pp)->next)
+        if (*pp == s) { *pp = s->next; break; }
     free(s);   /* redirect table goes with it */
     plh_client_set_data(c, PLH_SVC_INPUT, NULL);
     if (nclients > 0) nclients--;
