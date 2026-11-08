@@ -31,6 +31,8 @@ PARSECD="$WINEPREFIX/drive_c/Program Files/Parsec/parsecd.exe"
 
 [ -n "${PLH_DLLOVERRIDES:-}" ] && export WINEDLLOVERRIDES="$WINEDLLOVERRIDES;$PLH_DLLOVERRIDES"
 export WINEDEBUG="${TRACE:-${WINEDEBUG:--all}}"
+# Focused trace set up by runtime/trace-display-list.sh (file removed by its --restore).
+[ -f "$PLH_TRACES/wine-debug.override" ] && export WINEDEBUG="$(cat "$PLH_TRACES/wine-debug.override")"
 # DXVK: HUD off, log in traces
 export DXVK_LOG_PATH="$PLH_TRACES" DXVK_LOG_LEVEL="${DXVK_LOG_LEVEL:-info}"
 
