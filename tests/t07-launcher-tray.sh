@@ -105,18 +105,18 @@ for bad in ("", "0", "1920x", "99999x99999", "100x100", "1920x1080; rm", "5000x1
     assert not m.plhconfig.valid_mode(bad), bad
 for good in ch["PLH_VIRTUAL_DISPLAY_MODE"]:
     assert m.plhconfig.valid_mode(good), good
-# R4: plhconfig.write() must refuse an invalid resolution (strict with PLH_T07_STRICT_MODE=1 until runtime fixes it)
+# R4: plhconfig.write() must refuse an invalid resolution (fixed by runtime; strict by default, PLH_T07_STRICT_MODE=0 to only report)
 import os, tempfile
 cfgp = os.path.join(tempfile.mkdtemp(), "cfg")
 accepted = []
-for v in ("9999x9999", "abc", "1280x720 ; id"):
+for v in ("9999x9999", "abc", "1280x720 ; id", "1921x1080", "1920x2400", "4096x4096"):
     try:
         m.plhconfig.write({"PLH_VIRTUAL_DISPLAY_MODE": v}, cfgp); accepted.append(v)
     except ValueError:
         pass
 if accepted:
-    if os.environ.get("PLH_T07_STRICT_MODE") == "1":
+    if os.environ.get("PLH_T07_STRICT_MODE", "1") == "1":
         raise SystemExit("plhconfig.write accepted invalid resolution(s): %r" % accepted)
-    print("  # OPEN REFUTATION R4: plhconfig.write accepts invalid PLH_VIRTUAL_DISPLAY_MODE values %r" % accepted)
+    print("  # REFUTATION R4: plhconfig.write accepts invalid PLH_VIRTUAL_DISPLAY_MODE values %r" % accepted)
 PY
 pass "launcher add/remove (+icon), uninstall --dry-run, config round trip, env.sh, tray logic"

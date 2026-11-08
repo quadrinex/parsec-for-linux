@@ -25,7 +25,10 @@ flock -w 180 9 || skip "/tmp/plh-vout.lock busy for 180 s (another test is using
 # Safety: never run while a client is connected (a new output would disturb the session) or when
 # a virtual output is already present (not ours).
 if [ -f "$HOME/.parsec/log.txt" ] || true; then :; fi
-[ "$(vcount_kd)" = 0 ] || skip "a Virtual-plh output already exists (not touching it)"
+if [ "$(vcount_kd)$(vcount_xr)" != 00 ]; then  # we hold /tmp/plh-vout.lock: a leftover output is a leak or a rule breach
+  xrandr --listmonitors 2>/dev/null | grep Virtual-plh | sed 's/^/  # stray: /'
+  fail "a Virtual-plh output exists although we hold /tmp/plh-vout.lock (leaked by a crashed process or created by a test that ignores the lock rule); not touching it, results would be unreliable"
+fi
 # A client connected = last connect/disconnect line in the Parsec log is "connected." and parsecd runs.
 if [ -x "$HOST" ] && pgrep -x parsecd >/dev/null 2>&1; then
   plog=$(ls -t "$REPO"/runtime/traces/parsec*.log "$PREFIX_DIR"/drive_c/users/*/AppData/Roaming/Parsec/log.txt 2>/dev/null | head -1)
