@@ -170,6 +170,11 @@ void cap_vout_handle(struct plh_client *c, const struct plh_msg_hdr *h, const vo
         struct plh_vout_create rq = { 0 };
         memcpy(&rq, p, h->size < sizeof rq ? h->size : sizeof rq);
         struct plh_vout_create_reply rep = { 0 };
+        if (!env_flag("PLH_VIRTUAL_DISPLAY") && !env_flag("PLH_VIRTUAL_DISPLAY_AUTO")) {
+            PLH_WARN(MOD, "VOUT_CREATE refused: PLH_VIRTUAL_DISPLAY and PLH_VIRTUAL_DISPLAY_AUTO are both off");
+            plh_reply_error(c, h, PLH_E_PERM, "virtual display disabled (PLH_VIRTUAL_DISPLAY=0)");
+            return;
+        }
         int rc = create(c, &rq, &rep);
         if (rc) { plh_reply_error(c, h, rc, "cannot create the virtual output (%d)", rc); return; }
         plh_reply(c, h, &rep, sizeof rep);
