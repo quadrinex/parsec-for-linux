@@ -7,6 +7,8 @@
 set -u
 exec 8>/tmp/plh-input.lock
 flock -w 120 8 || { echo "Bail out! /tmp/plh-input.lock unavailable"; exit 1; }
+exec 7>/tmp/plh-vout.lock
+flock -w 180 7 || { echo "Bail out! /tmp/plh-vout.lock unavailable"; exit 1; }
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../../.." && pwd)
 ctl=$root/build/input/plh-input-ctl; probe=$root/build/bridge/vout-probe
@@ -28,6 +30,7 @@ kdesk() { kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk '/Geom
   x=p[1];y=p[2];w=s[1];h=s[2]; if(!i||x<mx)mx=x; if(!i||y<my)my=y; if(!i||x+w>Mx)Mx=x+w; if(!i||y+h>My)My=y+h; i=1}
   END{print mx,my,Mx-mx,My-my}'; }
 vgeom() { kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk '/^Output:/{v=($0 ~ /plh-virtual/)} v&&/Geometry:/{split($2,p,",");split($3,s,"x");print p[1],p[2],s[1],s[2]}'; }
+xrandr --listmonitors 2>/dev/null | grep -q 'Virtual-plh' && bail "a Virtual-plh output exists (another experiment?)"
 for _ in $(seq 60); do [ -z "$(vgeom)" ] && break; sleep 1; done   # another teammate may be using it
 vgeom0=$(vgeom); [ -z "$vgeom0" ] || bail "a virtual output already exists"
 read -r DX DY DW DH < <(kdesk); echo "# live desktop $DX,$DY ${DW}x$DH"
