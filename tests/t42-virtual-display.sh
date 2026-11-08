@@ -78,6 +78,42 @@ s1=$(stat -c %s "$cfg" 2>/dev/null || echo 0)
 info "1d ok: 5 create/kill cycles, nothing left; kwinoutputconfig.json $s0 -> $s1 bytes"
 [ $((s1 - s0)) -le 4096 ] || fail "1d: kwinoutputconfig.json grew by $((s1 - s0)) bytes in 5 cycles (unbounded growth of KWin config)"
 
+# --- 3s. simulated xrandr: the REAL screen_layout() must not change when Virtual-plh* appears (any position)
+if [ -f "$HOST" ] && grep -q 'Virtual-plh' "$HOST"; then
+  awk '/^screen_layout\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$HOST" >"$D/sl-sim.sh"
+  mkdir -p "$D/bin"
+  X3='Monitors: 3
+ 0: +*DP-2 1920/527x1080/296+0+0  DP-2
+ 1: +HDMI-A-2 1920/527x1080/296+1920+0  HDMI-A-2
+ 2: +HDMI-A-1 1920/527x1080/296+3840+0  HDMI-A-1'
+  X4='Monitors: 4
+ 0: +*DP-2 1920/527x1080/296+0+0  DP-2
+ 1: +HDMI-A-2 1920/527x1080/296+1920+0  HDMI-A-2
+ 2: +HDMI-A-1 1920/527x1080/296+3840+0  HDMI-A-1
+ 3: +Virtual-plh-virtual 1920/1920x1080/1080+5760+0  Virtual-plh-virtual'
+  X4m='Monitors: 4
+ 0: +*DP-2 1920/527x1080/296+0+0  DP-2
+ 1: +Virtual-plh-virtual 1920/1920x1080/1080+5760+0  Virtual-plh-virtual
+ 2: +HDMI-A-2 1920/527x1080/296+1920+0  HDMI-A-2
+ 3: +HDMI-A-1 1920/527x1080/296+3840+0  HDMI-A-1'
+  X2='Monitors: 2
+ 0: +*DP-2 1920/527x1080/296+0+0  DP-2
+ 1: +HDMI-A-2 1920/527x1080/296+1920+0  HDMI-A-2'
+  sim() { printf '#!/bin/sh\ncat <<"EOF"\n%s\nEOF\n' "$1" >"$D/bin/xrandr"; chmod +x "$D/bin/xrandr"
+          PATH="$D/bin:$PATH" bash -c ". $D/sl-sim.sh; screen_layout"; }
+  l3=$(sim "$X3"); l4=$(sim "$X4"); l4m=$(sim "$X4m"); l2=$(sim "$X2")
+  [ -n "$l3" ] || fail "3s: screen_layout returned nothing for a 3-screen xrandr output"
+  [ "$l3" = "$l4" ]  || fail "3s: virtual output appended changes screen_layout (host would restart)"
+  [ "$l3" = "$l4m" ] || fail "3s: virtual output in the middle changes screen_layout (indexes shift)"
+  [ "$l3" != "$l2" ] || fail "3s: removing a REAL screen is no longer detected (filter too greedy)"
+  # a real output whose name merely contains 'Virtual' (e.g. a VM) must still count
+  l5=$(sim "$(printf '%s\n 3: +Virtual-1 1024/300x768/200+5760+0  Virtual-1' "$X3")")
+  [ "$l3" != "$l5" ] || fail "3s: a non-plh output named Virtual-1 is wrongly ignored"
+  info "3s ok: real screen_layout ignores Virtual-plh* (appended or in the middle) but still sees real changes"
+else
+  note_skip "3s simulated screen_layout: host script does not filter Virtual-plh"
+fi
+
 # --- 3. layout-watch must not treat Virtual-plh* as a layout change
 if [ -f "$HOST" ] && grep -q 'plh-virtual\|Virtual-plh' "$HOST"; then
   fn() { awk -v n="$1" '$0 ~ "^"n"\\(\\) \\{" {p=1} p {print} p && /^}/ {exit}' "$HOST"; }
