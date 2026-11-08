@@ -11,6 +11,7 @@ TRAY_UNIT_DST="$UNIT_DIR/$TRAY_UNIT"
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 DESKTOP_DST="$APPS_DIR/parsec-for-linux.desktop"
 . "$ROOT/runtime/env.sh"
+. "$ROOT/runtime/bridge-pid.sh"
 LOG="$WINEPREFIX/drive_c/users/$USER/AppData/Roaming/Parsec/log.txt"
 
 running() { pgrep -f 'parsecd\.exe' >/dev/null; }
@@ -99,7 +100,11 @@ stop() {
     if [ -d "$WINEPREFIX" ]; then
         "$WINESERVER" -k 2>/dev/null
     fi
-    pkill -x plh-bridge 2>/dev/null
+    # Only the host's bridge, and bridges that took over the host's runtime directory; test bridges
+    # with their own --runtime-dir are left alone.
+    plh_host_bridge_stop
+    local pid
+    for pid in $(plh_stray_bridges); do kill "$pid" 2>/dev/null; done
     return 0
 }
 
@@ -108,14 +113,15 @@ status() {
     for name in parsecd plh-bridge plh-input-hook plh-pad-relay plh-clipd plh-clipsync layout-watch; do
         case $name in
             parsecd) pat='parsecd\.exe' ;;
-            plh-bridge) pat='build/bridge/plh-bridge' ;;
+            plh-bridge) pat='' ;;
             plh-input-hook) pat='plh-input-hook\.exe' ;;
             plh-pad-relay) pat='plh-pad-relay\.exe' ;;
             plh-clipd) pat='plh-clipd\.sh' ;;
             plh-clipsync) pat='plh-clipsync\.exe' ;;
             layout-watch) pat='parsec-linux-host[ ]watch' ;;
         esac
-        if pgrep -f "$pat" >/dev/null; then printf '%-16s running\n' "$name"
+        if { [ "$name" = plh-bridge ] && plh_host_bridge_pid >/dev/null; } ||
+           { [ "$name" != plh-bridge ] && pgrep -f "$pat" >/dev/null; }; then printf '%-16s running\n' "$name"
         else printf '%-16s stopped\n' "$name"; [ "$name" = layout-watch ] || rc=3; fi
     done
     if client_connected; then echo "client           connected"; else echo "client           none"; fi
