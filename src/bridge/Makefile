@@ -26,7 +26,7 @@ vpath %.xml $(sort $(dir $(addprefix $(ROOT)/,$(SERVICE_WL_PROTOCOLS))))
 CLIENT := $(ROOT)/src/bridge/client/plh_client.c
 HDRS := $(wildcard $(ROOT)/src/bridge/*.h $(ROOT)/src/bridge/proto/*.h $(ROOT)/src/bridge/client/*.h $(ROOT)/src/*/cap_internal.h)
 
-all: $(B)/plh-bridge $(B)/plh-captest $(B)/plh-captest.exe $(B)/proto-sizes $(B)/proto-sizes.exe $(B)/afunix-probe.exe dxgi-proxy
+all: $(B)/plh-bridge $(B)/plh-captest $(B)/plh-captest.exe $(B)/proto-sizes $(B)/proto-sizes.exe $(B)/afunix-probe.exe $(B)/vout-probe dxgi-proxy
 
 dxgi-proxy:
 	$(MAKE) -C $(ROOT)/src/capture/dxgi ROOT=$(ROOT)
@@ -42,6 +42,10 @@ $(B)/gen/%-protocol.c: %.xml
 $(B)/plh-bridge: $(SRCS) $(WLGEN_C) $(WLGEN_H) $(HDRS)
 	@mkdir -p $(B)
 	$(CC) $(CFLAGS) $(SERVICE_CFLAGS) $(PKG_CFLAGS) -I$(B)/gen -o $@ $(SRCS) $(WLGEN_C) $(PKG_LIBS) $(SERVICE_LIBS)
+
+$(B)/vout-probe: $(ROOT)/src/capture/tools/vout-probe.c $(B)/gen/zkde-screencast-unstable-v1-client-protocol.h $(B)/gen/zkde-screencast-unstable-v1-protocol.c
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) $(shell pkg-config --cflags wayland-client libpipewire-0.3) -I$(B)/gen -o $@ $< $(B)/gen/zkde-screencast-unstable-v1-protocol.c $(shell pkg-config --libs wayland-client libpipewire-0.3)
 
 $(B)/plh-captest: $(ROOT)/src/capture/tools/plh-captest.c $(CLIENT) $(HDRS)
 	@mkdir -p $(B)
