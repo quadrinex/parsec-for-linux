@@ -46,7 +46,10 @@ kernelbase.RegOpenKeyExW;kernelbase.RegOpenKeyExA;kernelbase.RegCreateKeyExW"
 # traced (run: whole session; start/--restore: the restart). Re-exec once under flock.
 if [ -z "${PLH_HOST_LOCK_HELD:-}" ]; then
     export PLH_HOST_LOCK_HELD=1
-    exec flock /tmp/plh-host.lock "$0" "$@"
+    # -o: the lock fd is closed in the command, so the daemons it starts do not inherit (and keep) the lock.
+    flock -n -E 99 -o /tmp/plh-host.lock "$0" "$@"; rc=$?
+    [ $rc -eq 99 ] && echo "trace-display-list: /tmp/plh-host.lock is held by another host operation; try again later" >&2
+    exit $rc
 fi
 
 die() { echo "trace-display-list: $*" >&2; exit 1; }
