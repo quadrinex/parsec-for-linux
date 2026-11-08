@@ -6,6 +6,7 @@
 #                                         session (connect ... disconnect), then restore the
 #                                         normal host. Ctrl-C also restores.
 #   runtime/trace-display-list.sh start   restart the host with the trace and return
+#   (all modes take flock /tmp/plh-host.lock; start releases it on return, so the traced host is then unprotected)
 #   runtime/trace-display-list.sh --restore   remove the trace settings, restart the host normally
 #   Options: --max-minutes N (run: give up and restore after N minutes, default 30)
 #
@@ -40,6 +41,13 @@ cfgmgr32.CM_Register_Notification;cfgmgr32.CM_Reenumerate_DevNode_Ex;\
 setupapi.CM_Get_Device_Interface_ListW;setupapi.CM_Get_Device_Interface_List_SizeW;\
 kernelbase.CreateFileW;kernelbase.CreateFileA;kernelbase.DeviceIoControl;\
 kernelbase.RegOpenKeyExW;kernelbase.RegOpenKeyExA;kernelbase.RegCreateKeyExW"
+
+# Host coordination rule: hold /tmp/plh-host.lock for the whole window where the host is stopped or
+# traced (run: whole session; start/--restore: the restart). Re-exec once under flock.
+if [ -z "${PLH_HOST_LOCK_HELD:-}" ]; then
+    export PLH_HOST_LOCK_HELD=1
+    exec flock /tmp/plh-host.lock "$0" "$@"
+fi
 
 die() { echo "trace-display-list: $*" >&2; exit 1; }
 
