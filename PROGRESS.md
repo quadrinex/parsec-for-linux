@@ -86,6 +86,7 @@ Nothing is "done" without a test that proves it. Last update: 2026-10-30 (start)
 - Patch 0003 has not been verified on a real WebSocket drop.
 - t10, t11, t12 require that no keep-above window hides the test pattern.
 - The uinput input service injects into the real session while a client is connected.
+- Virtual display (on demand, and automatic when the screens are off): **planned, not built** (`docs/plan-virtual-display.md`, D-019). Parsec's own virtual display fails at every connection (`MM_Connect`, its private driver).
 
 ## Phase 2: actual state
 - Done and tested here: Wayland/KDE detection, encoder selection, x264 software encoding, KWin geometry, `install.sh` on Arch, PKGBUILD (`makepkg` succeeded, package not installed).
