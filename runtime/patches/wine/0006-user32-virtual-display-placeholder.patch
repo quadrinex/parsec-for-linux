@@ -1,0 +1,133 @@
+user32: virtual display placeholder from the registry.
+
+While HKLM\Software\Wine\PlhVirtualDisplay (written by the dxgi proxy) names a device and Active is 0,
+EnumDisplayDevicesW (adapter list and by device name) and EnumDisplaySettings[Ex]W answer for it as one
+attached monitor with one mode (Width x Height, 60 Hz, 32 bpp, Left/Top). Wine's own answer always wins:
+once the real output exists the patch steps aside. Absent key: no change.
+
+--- a/dlls/user32/sysparams.c
++++ b/dlls/user32/sysparams.c
+@@ -612,6 +612,40 @@
+ }
+ 
+ 
++/* Virtual display placeholder: HKLM\\Software\\Wine\\PlhVirtualDisplay, written by the dxgi proxy.
++ * While Active is 0 the device DeviceName is answered as one attached monitor with one 60 Hz mode.
++ * Absent key, Active=1 or a device Wine already knows: no change at all. */
++struct plh_vd { WCHAR name[32]; LONG left, top, width, height; };
++
++static BOOL plh_vd_read( struct plh_vd *vd )
++{
++    DWORD size, type, val, active = 0;
++    LONG v[4] = {0};
++    static const WCHAR *names[4] = { L"Left", L"Top", L"Width", L"Height" };
++    HKEY key;
++    int i;
++
++    if (RegOpenKeyExW( HKEY_LOCAL_MACHINE, L"Software\\Wine\\PlhVirtualDisplay", 0, KEY_READ, &key )) return FALSE;
++    memset( vd, 0, sizeof(*vd) );
++    size = sizeof(vd->name) - sizeof(WCHAR);
++    if (RegQueryValueExW( key, L"DeviceName", NULL, &type, (BYTE *)vd->name, &size ) || type != REG_SZ) vd->name[0] = 0;
++    size = sizeof(val);
++    if (!RegQueryValueExW( key, L"Active", NULL, &type, (BYTE *)&val, &size ) && type == REG_DWORD) active = val;
++    for (i = 0; i < 4; i++)
++    {
++        size = sizeof(val);
++        if (!RegQueryValueExW( key, names[i], NULL, &type, (BYTE *)&val, &size ) && type == REG_DWORD) v[i] = val;
++    }
++    RegCloseKey( key );
++    vd->left = v[0]; vd->top = v[1]; vd->width = v[2]; vd->height = v[3];
++    return !active && vd->name[0] && vd->width > 0 && vd->height > 0;
++}
++
++static BOOL plh_vd_match( const WCHAR *device, struct plh_vd *vd )
++{
++    return device && device[0] && plh_vd_read( vd ) && !wcsicmp( device, vd->name );
++}
++
+ /***********************************************************************
+  *             EnumDisplaySettingsExW (USER32.@)
+  */
+@@ -619,8 +653,29 @@
+                                     DEVMODEW *dev_mode, DWORD flags )
+ {
+     UNICODE_STRING str;
++    struct plh_vd vd;
++
+     RtlInitUnicodeString( &str, device );
+-    return NtUserEnumDisplaySettings( &str, mode, dev_mode, flags );
++    if (NtUserEnumDisplaySettings( &str, mode, dev_mode, flags )) return TRUE;
++    if (!plh_vd_match( device, &vd )) return FALSE;
++    if (mode != 0 && mode != ENUM_CURRENT_SETTINGS && mode != ENUM_REGISTRY_SETTINGS) return FALSE;
++    if (dev_mode->dmSize < FIELD_OFFSET(DEVMODEW, dmDisplayFrequency) + sizeof(DWORD)) return FALSE;
++    memset( (char *)dev_mode + FIELD_OFFSET(DEVMODEW, dmSpecVersion), 0,
++            dev_mode->dmSize - FIELD_OFFSET(DEVMODEW, dmSpecVersion) );
++    lstrcpynW( dev_mode->dmDeviceName, vd.name, CCHDEVICENAME );
++    dev_mode->dmSpecVersion = 0x0401;
++    dev_mode->dmDriverVersion = 0x0401;
++    dev_mode->dmFields = DM_POSITION | DM_DISPLAYORIENTATION | DM_BITSPERPEL | DM_PELSWIDTH |
++                         DM_PELSHEIGHT | DM_DISPLAYFLAGS | DM_DISPLAYFREQUENCY;
++    dev_mode->dmPosition.x = vd.left;
++    dev_mode->dmPosition.y = vd.top;
++    dev_mode->dmDisplayOrientation = DMDO_DEFAULT;
++    dev_mode->dmBitsPerPel = 32;
++    dev_mode->dmPelsWidth = vd.width;
++    dev_mode->dmPelsHeight = vd.height;
++    dev_mode->dmDisplayFlags = 0;
++    dev_mode->dmDisplayFrequency = 60;
++    return TRUE;
+ }
+ 
+ static UINT get_ntuser_dpi_context( DPI_AWARENESS_CONTEXT context )
+@@ -990,7 +1045,50 @@
+ {
+     UNICODE_STRING str;
+     RtlInitUnicodeString( &str, device );
+-    if (!NT_SUCCESS(NtUserEnumDisplayDevices( &str, index, info, flags ))) return FALSE;
++    struct plh_vd vd;
++
++    if (!NT_SUCCESS(NtUserEnumDisplayDevices( &str, index, info, flags )))
++    {
++        DISPLAY_DEVICEW tmp = {.cb = sizeof(tmp)};
++        BOOL adapter_list, known = FALSE;
++        DWORD i;
++
++        if (!plh_vd_read( &vd )) return FALSE;
++        adapter_list = !device || !device[0];
++        if (adapter_list)
++        {
++            /* only the entry right after the last real adapter, and only if Wine does not list it */
++            for (i = 0; i < index; i++)
++            {
++                if (!NT_SUCCESS(NtUserEnumDisplayDevices( &str, i, &tmp, 0 ))) return FALSE;
++                if (!wcsicmp( tmp.DeviceName, vd.name )) known = TRUE;
++            }
++            if (known) return FALSE;
++        }
++        else if (index != 0 || wcsicmp( device, vd.name )) return FALSE;
++
++        if (info->cb >= offsetof(DISPLAY_DEVICEW, DeviceName) + sizeof(info->DeviceName))
++        {
++            lstrcpynW( info->DeviceName, vd.name, ARRAY_SIZE(info->DeviceName) );
++            if (!adapter_list)
++            {
++                int len = lstrlenW( info->DeviceName );
++                lstrcpynW( info->DeviceName + len, L"\\Monitor0", ARRAY_SIZE(info->DeviceName) - len );
++            }
++        }
++        if (info->cb >= offsetof(DISPLAY_DEVICEW, DeviceString) + sizeof(info->DeviceString))
++            lstrcpyW( info->DeviceString, adapter_list ? L"Virtual display adapter" : L"Generic Non-PnP Monitor" );
++        if (info->cb >= offsetof(DISPLAY_DEVICEW, StateFlags) + sizeof(info->StateFlags))
++            info->StateFlags = adapter_list ? DISPLAY_DEVICE_ATTACHED_TO_DESKTOP
++                                            : DISPLAY_DEVICE_ATTACHED | DISPLAY_DEVICE_ACTIVE;
++        if (info->cb >= offsetof(DISPLAY_DEVICEW, DeviceID) + sizeof(info->DeviceID))
++            lstrcpyW( info->DeviceID, adapter_list ? L"PCI\\VEN_1234&DEV_0001" : L"MONITOR\\PLHVIRT\\{4d36e96e-e325-11ce-bfc1-08002be10318}\\0000" );
++        if (info->cb >= offsetof(DISPLAY_DEVICEW, DeviceKey) + sizeof(info->DeviceKey))
++            lstrcpyW( info->DeviceKey, L"" );
++        if (!adapter_list && info->cb >= offsetof(DISPLAY_DEVICEW, DeviceString) + sizeof(info->DeviceString))
++            set_monitor_name( device, info );
++        return TRUE;
++    }
+     if (device && device[0] && info->cb >= offsetof(DISPLAY_DEVICEW, DeviceString) + sizeof(info->DeviceString))
+         set_monitor_name( device, info );
+     return TRUE;

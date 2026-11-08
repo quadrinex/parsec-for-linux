@@ -23,7 +23,22 @@ OPTIONS = {
     "PLH_ENABLE_GAMEPAD": ("Remote gamepads", "1"),
     "PLH_ENABLE_CLIPBOARD": ("Text clipboard sharing", "1"),
     "PLH_BRIDGE_VERBOSE": ("Verbose bridge log (for bug reports)", "0"),
+    "PLH_VIRTUAL_DISPLAY": ("Offer a virtual display", "0"),
+    "PLH_VIRTUAL_DISPLAY_AUTO": ("Use a virtual display when the screens are off", "0"),
+    "PLH_VIRTUAL_DISPLAY_MODE": ("Virtual display resolution", "1920x1080"),
 }
+
+# Options that are not on/off switches: key -> allowed values (first = default). A settings window must offer
+# these as a choice, not as a checkbox; see valid_mode() for the accepted free-form syntax.
+CHOICES = {
+    "PLH_VIRTUAL_DISPLAY_MODE": ["1920x1080", "2560x1440", "1280x720", "3840x2160"],
+}
+
+
+def valid_mode(text):
+    """True for 'WIDTHxHEIGHT' within the limits the encoder supports (320..4096 wide, 200..4096 high)."""
+    m = re.fullmatch(r"(\d{3,4})x(\d{3,4})", str(text))
+    return bool(m) and 320 <= int(m.group(1)) <= 4096 and 200 <= int(m.group(2)) <= 4096
 
 _LINE = re.compile(r'^:\s+"\$\{(\w+):=(.*)\}"\s*$')
 _HEADER = (
