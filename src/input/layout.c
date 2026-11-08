@@ -55,6 +55,34 @@ plh_rect plh_outputs_bounds(const struct plh_output *o, int n)
     return r;
 }
 
+int plh_output_is_virtual(const char *name)
+{
+    return name && strstr(name, "plh-virtual") != NULL;
+}
+
+int plh_layout_snapshot(const struct plh_output *k, int nk, plh_rect *desk, int *tx, int *ty)
+{
+    *desk = plh_outputs_bounds(k, nk);
+    if (nk <= 0) return -1;
+    if (plh_kwin_primary_translation(k, nk, tx, ty) == 0) return 0;
+    for (int j = 0; j < nk; j++)
+        if (!plh_output_is_virtual(k[j].name)) { *tx = k[j].x; *ty = k[j].y; return 0; }
+    return -1;
+}
+
+int plh_redirect_map(const struct plh_redir *r, int n, int wx, int wy, int *kx, int *ky)
+{
+    for (int i = 0; i < n; i++) {
+        const plh_rect *f = &r[i].from, *t = &r[i].to;
+        if (f->w <= 0 || f->h <= 0 || t->w <= 0 || t->h <= 0) continue;
+        if (wx < f->x || wy < f->y || wx >= f->x + f->w || wy >= f->y + f->h) continue;
+        *kx = t->x + (int)(((long long)(wx - f->x) * t->w) / f->w);
+        *ky = t->y + (int)(((long long)(wy - f->y) * t->h) / f->h);
+        return 1;
+    }
+    return 0;
+}
+
 static int matches(const plh_rect *win, int nw, const struct plh_output *k, int nk, int tx, int ty)
 {
     for (int i = 0; i < nw; i++) {
@@ -73,6 +101,7 @@ int plh_layout_translation(const plh_rect *win, int nw, int win_primary,
     if (nw <= 0 || nk <= 0) return -1;
     int p = (win_primary >= 0 && win_primary < nw) ? win_primary : 0;
     for (int j = 0; j < nk; j++) {
+        if (plh_output_is_virtual(k[j].name)) continue;   /* never an anchor for the Windows primary */
         int cx = k[j].x - win[p].x, cy = k[j].y - win[p].y;
         if (!matches(win, nw, k, nk, cx, cy)) continue;
         /* tie-break: prefer the primary KWin output (priority 1) for the Windows primary */
@@ -85,7 +114,7 @@ int plh_layout_translation(const plh_rect *win, int nw, int win_primary,
 int plh_kwin_primary_translation(const struct plh_output *k, int nk, int *tx, int *ty)
 {
     for (int j = 0; j < nk; j++)
-        if (k[j].priority == 1) { *tx = k[j].x; *ty = k[j].y; return 0; }
+        if (k[j].priority == 1 && !plh_output_is_virtual(k[j].name)) { *tx = k[j].x; *ty = k[j].y; return 0; }
     return -1;
 }
 

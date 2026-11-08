@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <time.h>
 #include <unistd.h>
 #include "plh_input.h"
 
@@ -23,6 +24,11 @@ struct uin {
     int last_ptr;           /* fd of the last pointer that moved (buttons/wheel) */
     int wacc_v, wacc_h;     /* wheel remainder < 120 */
     int ax, ay;             /* last ABS values sent (-1 = none) */
+    int owned;              /* fds are real uinput devices (else test pipes) */
+    unsigned btn_down;      /* bitmask of buttons held through this backend */
+    int has_pending;        /* resize deferred while a button is down */
+    plh_rect pending;
+    long resize_us;
 };
 
 static const int btn_codes[PLH_BTN_COUNT] = { BTN_LEFT, BTN_RIGHT, BTN_MIDDLE, BTN_SIDE, BTN_EXTRA };
@@ -125,7 +131,10 @@ static int u_button(plh_input *in, enum plh_button b, int down)
 {
     struct uin *u = (struct uin *)in;
     int r = emit(u->last_ptr, EV_KEY, btn_codes[b], down ? 1 : 0);
-    return r ? r : syn(u->last_ptr);
+    if (down) u->btn_down |= 1u << b; else u->btn_down &= ~(1u << b);
+    r = r ? r : syn(u->last_ptr);
+    if (!u->btn_down && u->has_pending) { u->has_pending = 0; plh_uinput_resize(in, &u->pending); }
+    return r;
 }
 
 static int u_wheel(plh_input *in, int v120, int h120)
@@ -183,6 +192,37 @@ int plh_uinput_evnodes(plh_input *in, char kbd[16], char rel[16], char abs_[16])
     return r;
 }
 
+int plh_uinput_resize(plh_input *in, const plh_rect *rect)
+{
+    struct uin *u = (struct uin *)in;
+    if (!in || !rect || rect->w <= 0 || rect->h <= 0) return -EINVAL;
+    if (rect->x == in->desktop.x && rect->y == in->desktop.y && rect->w == in->desktop.w && rect->h == in->desktop.h) {
+        u->has_pending = 0;
+        return 0;
+    }
+    if (u->btn_down) { u->pending = *rect; u->has_pending = 1; return 1; }
+    u->has_pending = 0;
+    if (u->owned) {
+        struct timespec t0, t1;
+        char err[128];
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        /* new device first: if it fails the old one keeps working */
+        int nfd = mkdev("PLH virtual absolute pointer", 0x7003, 2, rect, err, sizeof err);
+        if (nfd < 0) return -EIO;
+        if (u->last_ptr == u->abs) u->last_ptr = nfd;
+        ioctl(u->abs, UI_DEV_DESTROY);
+        close(u->abs);
+        u->abs = nfd;
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        u->resize_us = (t1.tv_sec - t0.tv_sec) * 1000000L + (t1.tv_nsec - t0.tv_nsec) / 1000;
+    }
+    u->ax = u->ay = -1;
+    in->desktop = *rect;
+    return 0;
+}
+
+long plh_uinput_last_resize_us(plh_input *in) { return ((struct uin *)in)->resize_us; }
+
 static const struct plh_input_ops uinput_ops = {
     "uinput", u_key, u_rel, u_abs, u_button, u_wheel, u_close
 };
@@ -217,5 +257,6 @@ plh_input *plh_uinput_open(const plh_rect *desktop, char *err, size_t errlen)
         return NULL;
     }
     u->last_ptr = u->abs;
+    u->owned = 1;
     return &u->base;
 }

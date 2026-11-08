@@ -23,12 +23,46 @@ static int def_tx, def_ty;        /* default translation (primary KWin output) *
  * Not implemented: automatic mode based on host cursor visibility (capture cursor metadata). */
 static int mouse_rel_mode;
 
+#define MAX_REDIR 4
+
 struct icli {
+    struct plh_redir redir[MAX_REDIR];   /* Windows rect -> KWin rect, released with the client */
+    int nredir;
     int tx, ty;                   /* KWin = Windows + T, for this client */
     unsigned char keys[KEY_CNT / 8 + 1];
     unsigned char btns;
     plh_pad *pads[4];             /* virtual gamepads owned by this client */
 };
+
+static int nclients;
+static int refresh_timer = -1;
+
+/* Re-read the KWin layout: desktop rect (virtual output included), default translation, uinput
+ * range. Called at start, on SET_LAYOUT, periodically while clients exist, and before rejecting
+ * a point outside the cached desktop. Returns 1 if the desktop rect changed. */
+static int refresh_layout(void)
+{
+    struct plh_output o[16];
+    const char *src;
+    int n = plh_detect_outputs(o, 16, &src);
+    if (n <= 0) return 0;     /* keep the last known layout */
+    plh_rect d; int tx, ty;
+    if (plh_layout_snapshot(o, n, &d, &tx, &ty)) return 0;
+    memcpy(outs, o, sizeof o); nouts = n;
+    def_tx = tx; def_ty = ty;
+    if (!memcmp(&d, &desk, sizeof d)) return 0;
+    PLH_INFO(MOD, "desktop %d,%d %dx%d -> %d,%d %dx%d", desk.x, desk.y, desk.w, desk.h, d.x, d.y, d.w, d.h);
+    desk = d;
+    if (in) {
+        int r = plh_uinput_resize(in, &d);
+        if (r == 1) PLH_INFO(MOD, "uinput resize deferred (button down)");
+        else if (r < 0) PLH_ERR(MOD, "uinput resize failed: %d", r);
+        else PLH_INFO(MOD, "uinput absolute device recreated in %ld us", plh_uinput_last_resize_us(in));
+    }
+    return 1;
+}
+
+static void refresh_tick(void *data) { (void)data; if (nclients > 0) refresh_layout(); }
 
 static struct icli *cli_state(struct plh_client *c)
 {
@@ -36,6 +70,8 @@ static struct icli *cli_state(struct plh_client *c)
     if (!s) {
         s = calloc(1, sizeof *s);
         if (!s) return NULL;
+        if (nclients == 0) refresh_layout();
+        nclients++;
         s->tx = def_tx; s->ty = def_ty;
         plh_client_set_data(c, PLH_SVC_INPUT, s);
     }
@@ -79,6 +115,9 @@ static int apply(struct icli *s, const struct plh_input_ev *e)
         if (mouse_rel_mode) return 1;                                       /* dropped (relative mode) */
         {   /* outside the desktop = invalid message: rejected (never clamped to an edge, see the 0,31 incident) */
             int x = e->a + s->tx, y = e->b + s->ty;
+            plh_redirect_map(s->redir, s->nredir, e->a, e->b, &x, &y);   /* before the in-desktop check */
+            if (x < desk.x || y < desk.y || x >= desk.x + desk.w || y >= desk.y + desk.h)
+                refresh_layout();   /* cached desktop may be stale (screen added/removed); re-checked below */
             if (x < desk.x || y < desk.y || x >= desk.x + desk.w || y >= desk.y + desk.h) return -1;
             return plh_input_move_abs(in, x, y);
         }
@@ -137,9 +176,7 @@ static void handle(struct plh_client *c, const struct plh_msg_hdr *h, const void
             w[i] = (plh_rect){ m[i].x, m[i].y, m[i].w, m[i].h };
             if (m[i].primary) prim = (int)i;
         }
-        const char *osrc;
-        nouts = plh_detect_outputs(outs, 16, &osrc);   /* refresh: the layout may have changed */
-        PLH_INFO(MOD, "screen layout read via %s", osrc);
+        refresh_layout();   /* the layout may have changed (screen unplugged, virtual output) */
         struct plh_input_layout_reply r = { PLH_OK, def_tx, def_ty, desk.x, desk.y, desk.w, desk.h, 1 };
         if (nouts > 0 && plh_layout_translation(w, (int)lh->count, prim, outs, nouts, &r.tx, &r.ty) == 0) {
             s->tx = r.tx; s->ty = r.ty;
@@ -168,6 +205,26 @@ static void handle(struct plh_client *c, const struct plh_msg_hdr *h, const void
         if (h->seq) { struct plh_input_status st = { PLH_OK, 1 }; plh_reply(c, h, &st, sizeof st); }
         return;
     }
+    case PLH_MSG_INPUT_REDIRECT: {
+        const struct plh_input_redirect_hdr *rh = p;
+        if (h->size < sizeof *rh || rh->count > MAX_REDIR ||
+            h->size < sizeof *rh + (uint64_t)rh->count * sizeof(struct plh_redirect)) {
+            if (h->seq) plh_reply_error(c, h, PLH_E_PROTO, "size");
+            return;
+        }
+        const struct plh_redirect *pr = (const void *)(rh + 1);
+        s->nredir = 0;                                   /* the new table replaces the old one */
+        for (uint32_t i = 0; i < rh->count; i++) {
+            struct plh_redir e = {
+                { pr[i].from.left, pr[i].from.top, pr[i].from.right - pr[i].from.left, pr[i].from.bottom - pr[i].from.top },
+                { pr[i].to.left, pr[i].to.top, pr[i].to.right - pr[i].to.left, pr[i].to.bottom - pr[i].to.top } };
+            if (e.from.w <= 0 || e.from.h <= 0 || e.to.w <= 0 || e.to.h <= 0) continue;   /* degenerate: ignored */
+            s->redir[s->nredir++] = e;
+        }
+        PLH_INFO(MOD, "client %u: %d redirect entries", plh_client_id(c), s->nredir);
+        if (h->seq) plh_reply(c, h, NULL, 0);
+        return;
+    }
     case PLH_MSG_INPUT_RELEASE_ALL: {
         release_all(s);
         struct plh_input_status st = { PLH_OK, 0 };
@@ -184,8 +241,9 @@ static void client_gone(struct plh_client *c)
     if (!s) return;
     release_all(s);
     drop_pads(s);
-    free(s);
+    free(s);   /* redirect table goes with it */
     plh_client_set_data(c, PLH_SVC_INPUT, NULL);
+    if (nclients > 0) nclients--;
 }
 
 static int init(void)
@@ -200,8 +258,7 @@ static int init(void)
     nouts = plh_detect_outputs(outs, 16, &osrc);
     PLH_INFO(MOD, "screen layout read via %s", osrc);
     if (nouts > 0) {
-        desk = plh_outputs_bounds(outs, nouts);
-        if (plh_kwin_primary_translation(outs, nouts, &def_tx, &def_ty)) { def_tx = outs[0].x; def_ty = outs[0].y; }
+        plh_layout_snapshot(outs, nouts, &desk, &def_tx, &def_ty);
     } else {
         desk = (plh_rect){ 0, 0, 5760, 1080 };
         PLH_WARN(MOD, "no way to read the screen layout: assuming desktop 0,0 5760x1080");
@@ -216,11 +273,14 @@ static int init(void)
         PLH_INFO(MOD, "uinput: keyboard %s, mouse %s, absolute %s; desktop %d,%d %dx%d; Windows->KWin %+d,%+d; mouse %s",
                  k, r, a, desk.x, desk.y, desk.w, desk.h, def_tx, def_ty, mouse_rel_mode ? "relative" : "absolute");
     }
+    refresh_timer = plh_timer_add(2000000000ull, 2000000000ull, refresh_tick, NULL);
     return 0;
 }
 
 static void fini(void)
 {
+    if (refresh_timer >= 0) plh_timer_del(refresh_timer);
+    refresh_timer = -1;
     plh_input_close(in);
     in = NULL;
 }

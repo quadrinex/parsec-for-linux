@@ -97,6 +97,23 @@ int plh_layout_translation(const plh_rect *win, int nw, int win_primary,
 /* Fallback: T = position of the primary KWin output (priority 1). */
 int plh_kwin_primary_translation(const struct plh_output *k, int nk, int *tx, int *ty);
 
+/* The bridge's virtual output ("Virtual-plh-virtual"): counted in the desktop rectangle,
+ * never used for the primary / translation search. */
+int plh_output_is_virtual(const char *name);
+/* Desktop bounding rect (all outputs, virtual included) + default translation (real primary). 0 ok. */
+int plh_layout_snapshot(const struct plh_output *k, int nk, plh_rect *desk, int *tx, int *ty);
+
+/* Redirect table: a Windows rect shown on another KWin rect (virtual output). */
+struct plh_redir { plh_rect from, to; };
+/* Maps a Windows point through the first entry containing it (scaled); 1 mapped, 0 no entry. */
+int plh_redirect_map(const struct plh_redir *r, int n, int wx, int wy, int *kx, int *ky);
+
+/* Absolute pointer device follows the desktop rect. 0 done/unchanged, 1 deferred (a button is
+ * down; applied when the last one is released), <0 -errno. Keyboard and relative devices untouched. */
+int plh_uinput_resize(plh_input *in, const plh_rect *rect);
+/* Microseconds the last recreation took (create new device, destroy old); 0 if none. */
+long plh_uinput_last_resize_us(plh_input *in);
+
 /* SendInput MOUSEEVENTF_ABSOLUTE (0..65535) -> pixels.
  * vrect = reference rectangle (Windows virtual screen if VIRTUALDESK, else primary screen),
  * in Windows space; result in Windows space (translate afterwards). */

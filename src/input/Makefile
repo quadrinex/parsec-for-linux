@@ -12,7 +12,7 @@ PECFLAGS := -O2 -std=c11 -Wall -Wextra
 CLIENT := ../bridge/client/plh_client.c
 PEHDRS := $(wildcard ../bridge/proto/*.h ../bridge/client/*.h)
 
-all: $(B)/pe/plh-pad-relay.exe $(B)/pe/plh-vigem.sys $(B)/pe/padprobe.exe $(B)/test-layout $(B)/pad-evdev-dump $(B)/libplhinput.a $(B)/plh-input-ctl $(B)/test-scancode $(B)/test-uinput-seq $(B)/pe/plh-input-hook.exe $(B)/pe/injectprobe.exe
+all: $(B)/pe/plh-pad-relay.exe $(B)/pe/plh-vigem.sys $(B)/pe/padprobe.exe $(B)/test-layout $(B)/test-vdisplay $(B)/pad-evdev-dump $(B)/libplhinput.a $(B)/plh-input-ctl $(B)/test-scancode $(B)/test-uinput-seq $(B)/pe/plh-input-hook.exe $(B)/pe/injectprobe.exe
 
 $(B)/pe/plh-input-hook.exe: pe/plh-input-hook.c $(CLIENT) $(PEHDRS)
 	@mkdir -p $(B)/pe
@@ -53,10 +53,14 @@ $(B):
 $(B)/test-layout: $(B)/tools/test-layout.o $(B)/libplhinput.a
 	$(CC) -o $@ $^ $(LDLIBS)
 
+$(B)/test-vdisplay: tests/test-vdisplay.c $(B)/libplhinput.a include/plh_input.h
+	$(CC) $(CFLAGS) -o $@ tests/test-vdisplay.c $(B)/libplhinput.a $(LDLIBS)
+
 test: all
 	$(B)/test-scancode
 	$(B)/test-uinput-seq
 	$(B)/test-layout
+	$(B)/test-vdisplay
 
 clean:
 	rm -rf $(B)
