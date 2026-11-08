@@ -20,7 +20,7 @@ run() {
   left=$(xrandr --listmonitors 2>/dev/null | grep -c Virtual-plh)
   # R5: second release must also be followed by its own grace destroy (release, re-dup in grace, hold 4.5 s, release, wait)
   rm -f $T/vd-probe.regrace.out; : > $T/vd-probe.regrace.samples
-  env $TENV timeout 90 wine $T/vd_probe.exe 2 keep regrace 2>&1 | tr -d '\r' | while IFS= read -r l; do
+  env $TENV timeout 90 wine $T/vd_probe.exe 2 keep regrace 2>&1 | sed -u 's/\r$//' | while IFS= read -r l; do
     echo "$l" >> $T/vd-probe.regrace.out
     case $l in "SAMPLE "*) echo "${l#SAMPLE }=$(xrandr --listmonitors 2>/dev/null | grep -c Virtual-plh)" >> $T/vd-probe.regrace.samples;; esac
   done
@@ -33,8 +33,9 @@ run() {
   [ "$(grep -c 'released after the grace period' $T/vd-probe.regrace.out)" = 1 ] || { echo "FAIL regrace (R5): expected exactly one grace release in the proxy log"; ok=0; }
   # env leak check: the host bridge must carry none of the test variables
   . runtime/bridge-pid.sh
-  hp=; for _ in $(seq 80); do hp=$(plh_host_bridge_pid) && break; hp=; sleep 0.5; done   # start takes 10-15 s
-  [ -n "$hp" ] && { tr '\0' '\n' < /proc/$hp/environ | grep -E '^PLH_(BRIDGE_DIR|VIRTUAL_DISPLAY|VIRTUAL_DISPLAY_AUTO|FAKE_SCREENS_OFF)=' && { echo "FAIL host bridge inherited test env"; ok=0; }; } || { echo "FAIL host bridge not running after restart"; ok=0; }
+  hp=; for _ in $(seq 240); do hp=$(plh_host_bridge_pid) && break; hp=; sleep 0.5; done   # start can take over a minute (wait_for_screens)
+  if [ -z "$hp" ]; then echo "FAIL host bridge not running after restart"; ok=0
+  elif tr '\0' '\n' < /proc/$hp/environ | grep -qE '^PLH_(BRIDGE_DIR|VIRTUAL_DISPLAY|VIRTUAL_DISPLAY_AUTO|FAKE_SCREENS_OFF)='; then echo "FAIL host bridge inherited test env"; ok=0; fi
   grep -q '^COUNT before dxgi=4 wine_monitors=3' $T/vd-probe.out || { echo "FAIL placeholder not listed as 4th output before"; ok=0; }
   grep -q '^OUT before 3 .*DISPLAY4 ' $T/vd-probe.out || ok=0
   grep -q '^DUP hr=0x00000000' $T/vd-probe.out || { echo "FAIL DuplicateOutput1 on the placeholder"; ok=0; }
