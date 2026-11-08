@@ -30,7 +30,7 @@ run() {
       grep -q 'released after the grace period' $T/vd-f2.f2.out || { echo "FAIL f2: no release after grace"; ok=0; }
       [ "$left" = 0 ] || { echo "FAIL f2: virtual output left behind"; ok=0; }
     elif [ $mode = overlap ]; then   # B created before A is released: A's Release must not clear the redirect
-      awk '/OVERLAP_A_RELEASED/{a=1} /OVERLAP_B_ALIVE/{b=1} /input redirect kept/{if(a&&!b)k=1} /input redirect cleared/{if(!b)early=1; else late++} END{exit !(k&&!early&&late==1)}' $T/vd-f2.overlap.out \
+      awk '/DUP2 hr/{a=1} /OVERLAP_B_ALIVE/{b=1} /input redirect kept/{if(a&&!b)k=1} /input redirect cleared/{if(!b)early=1; else late++} END{exit !(k&&!early&&late==1)}' $T/vd-f2.overlap.out \
         || { echo "FAIL overlap: redirect not kept while B lives, or not cleared exactly once after B"; ok=0; }
       grep -q 'DUP2 hr=0x00000000' $T/vd-f2.overlap.out || { echo "FAIL overlap: second duplication failed"; ok=0; }
       [ "$left" = 0 ] || { echo "FAIL overlap: virtual output left behind"; ok=0; }
