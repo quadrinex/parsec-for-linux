@@ -10,7 +10,7 @@ VP="$REPO/build/bridge/vout-probe"
 [ -n "${WAYLAND_DISPLAY:-}" ] || skip "no Wayland session"
 HOST="$REPO/bin/parsec-linux-host"
 D="$TMPD/t42"; rm -rf "$D"; mkdir -p "$D"
-SKIPS=()
+SKIPS=(); LIVEFAILS=()
 note_skip() { SKIPS+=("$1"); info "SKIP case: $1"; }
 
 vcount_kd() { kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -c 'Output: .*Virtual-plh'; }
@@ -279,12 +279,40 @@ else
   [ $rc = 0 ] || fail "4: placeholder case failed (see lines above)"
   wait_gone || fail "4: output left behind"
 fi
-note_skip "5 duplicate placeholder -> frames -> release + 3 s grace -> gone (capture vd_probe in the live prefix): needs the host restarted with PLH_VIRTUAL_DISPLAY=1 and the proxy installed; not automated yet (lead to confirm the host-restart window)"
-note_skip "6b F2 behaviour (duplicate default output yields virtual frames + redirect): dxgi side not delivered; only the state flag (6a) is tested"
+# --- 5, 6b, 7: live cases. They stop/restart the host and create real outputs: intrusive only (make test-full).
+# Each helper takes /tmp/plh-vout.lock itself, so ours is released first.
+live() { # live <label> <pass-pattern> <script> [args]
+  local label=$1 pat=$2; shift 2
+  exec 9>&-
+  bash "$@" >"$D/live-$label.out" 2>&1; local rc=$?
+  exec 9>/tmp/plh-vout.lock; flock -w 180 9 || fail "$label: cannot retake /tmp/plh-vout.lock"
+  if [ $rc = 77 ] || grep -q '^SKIP' "$D/live-$label.out"; then note_skip "$label: $(grep -m1 -E '^SKIP|SKIP' "$D/live-$label.out")"; return; fi
+  if [ $rc != 0 ] || { [ -n "$pat" ] && ! grep -qE "$pat" "$D/live-$label.out"; }; then
+    grep -E 'not ok|FAIL|Bail' "$D/live-$label.out" | sed 's/^/  #   /'
+    LIVEFAILS+=("$label (rc=$rc, output $D/live-$label.out)"); info "$label FAILED"; return
+  fi
+  info "$label ok: $(grep -E '^PASS|^# [0-9]+\.\.|^1\.\.' "$D/live-$label.out" | tail -1)"
+}
 if [ "${PLH_TEST_INTRUSIVE:-0}" = 1 ]; then
-  note_skip "7 input on the virtual output (flock /tmp/plh-input.lock, 50 px from LIVE edges): redirect/uinput resize not delivered"
+  [ -x "$HOST" ] || skip "bin/parsec-linux-host missing"
+  live "5-grace (re-duplication in grace, stale timer, listing twice, client SIGKILL)" '' "$REPO/tests/tools/vd-live.sh"
+  live "5-F1 (placeholder -> virtual output -> frames -> release -> gone)" '^PASS F1' "$REPO/src/capture/dxgi/test/vd-probe.sh"
+  live "6b-F2 (screens off -> virtual output + redirect, overlap, AUTO=0)" '^PASS F2' "$REPO/src/capture/dxgi/test/vd-probe-f2.sh"
+  live "7a-input-resize (uinput follows the live desktop)" '' "$REPO/src/input/tests/live-vout.sh"
+  live "7b-input-redirect (F2 redirect end to end)" '' "$REPO/src/input/tests/live-redirect.sh"
+  # (a failing helper must not prevent the host restore below)
+  # The helpers may leave test options in the host's environment: end with a clean restart (config.env options only).
+  ( exec 8>/tmp/plh-host.lock; flock -w 120 8 || exit 1
+    env -u PLH_BRIDGE_DIR -u PLH_VIRTUAL_DISPLAY -u PLH_VIRTUAL_DISPLAY_AUTO -u PLH_FAKE_SCREENS_OFF -u PLH_CAPTURE_BACKEND -u PLH_INPUT_BACKEND \
+      "$HOST" restart >"$D/final-restart.log" 2>&1 </dev/null 8>&- ) || fail "final clean host restart failed (host lock busy?)"
+  sleep 12
+  tr '\0' '\n' </proc/"$(pgrep -x plh-bridge | head -1)"/environ 2>/dev/null | grep -E '^PLH_(VIRTUAL_DISPLAY|FAKE_SCREENS_OFF|BRIDGE_DIR)=' | grep -v '=0$' \
+    && fail "the host bridge was left with test options in its environment (see lines above)"
+  st=$("$HOST" status 2>&1); echo "$st" | grep -q '^plh-bridge *running' || fail "host not restored after the live cases: $(echo "$st" | tr '\n' ' ')"
+  [ "$(vcount_kd)$(vcount_xr)" = 00 ] || fail "a virtual output remains after the live cases"
+  [ ${#LIVEFAILS[@]} = 0 ] || fail "live cases failed: $(printf '%s; ' "${LIVEFAILS[@]}")"
 else
-  note_skip "7 input on the virtual output: intrusive (PLH_TEST_INTRUSIVE=1) and not delivered"
+  note_skip "5/6b/7 live cases (stop/restart the host, real output, input): intrusive, rerun with PLH_TEST_INTRUSIVE=1 (make test-full)"
 fi
 
 if [ ${#SKIPS[@]} -gt 0 ]; then
