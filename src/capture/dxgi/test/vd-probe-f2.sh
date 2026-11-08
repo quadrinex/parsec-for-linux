@@ -41,8 +41,9 @@ run() {
   rm -rf $RD
   env -u PLH_BRIDGE_DIR -u PLH_VIRTUAL_DISPLAY -u PLH_VIRTUAL_DISPLAY_AUTO -u PLH_FAKE_SCREENS_OFF -u PLH_CAPTURE_BACKEND -u PLH_INPUT_BACKEND \
     bin/parsec-linux-host start >/dev/null 2>&1
-  . runtime/bridge-pid.sh; sleep 1
-  hp=$(plh_host_bridge_pid) && { tr '\0' '\n' < /proc/$hp/environ | grep -E '^PLH_(BRIDGE_DIR|VIRTUAL_DISPLAY|VIRTUAL_DISPLAY_AUTO|FAKE_SCREENS_OFF)=' && { echo "FAIL host bridge inherited test env"; ok=0; }; } || { echo "FAIL host bridge not running after restart"; ok=0; }
+  . runtime/bridge-pid.sh
+  hp=; for _ in $(seq 80); do hp=$(plh_host_bridge_pid) && break; hp=; sleep 0.5; done   # start takes 10-15 s
+  [ -n "$hp" ] && { tr '\0' '\n' < /proc/$hp/environ | grep -E '^PLH_(BRIDGE_DIR|VIRTUAL_DISPLAY|VIRTUAL_DISPLAY_AUTO|FAKE_SCREENS_OFF)=' && { echo "FAIL host bridge inherited test env"; ok=0; }; } || { echo "FAIL host bridge not running after restart"; ok=0; }
   [ $ok = 1 ] && echo "PASS F2 screens off -> virtual output + redirect (and AUTO=0 leaves the real output)" || { echo "FAIL (see $T/vd-f2.*)"; return 1; }
 }
 flock -w 400 -o /tmp/plh-vout.lock flock -w 300 -o /tmp/plh-host.lock bash -c 'cd "'"$R"'"; export T='"$T"'; '"$(declare -f run)"'; run'

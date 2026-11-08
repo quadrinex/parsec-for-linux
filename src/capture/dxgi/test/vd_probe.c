@@ -39,7 +39,7 @@ int main(int argc, char **argv)
     ID3D11Device *dev; D3D_FEATURE_LEVEL fl;
     if (FAILED(D3D11CreateDevice(a, D3D_DRIVER_TYPE_UNKNOWN, NULL, 0, NULL, 0, D3D11_SDK_VERSION, &dev, &fl, NULL))) { puts("FAIL device"); return 1; }
     IDXGIOutput5 *o5 = NULL;
-    if (argc > 2) { IDXGIOutput_Release(last); IDXGIAdapter_EnumOutputs(a, 0, &last); }
+    if (argc > 2 && strcmp(argv[2], "keep")) { IDXGIOutput_Release(last); IDXGIAdapter_EnumOutputs(a, 0, &last); }
     IDXGIOutput_QueryInterface(last, &IID_IDXGIOutput5, (void **)&o5);
     DXGI_FORMAT fmt = DXGI_FORMAT_B8G8R8A8_UNORM;
     IDXGIOutputDuplication *dup = NULL;
