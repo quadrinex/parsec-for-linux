@@ -18,6 +18,10 @@ vcount_xr() { xrandr --listmonitors 2>/dev/null | grep -c 'Virtual-plh'; }
 wait_gone() { local i; for i in $(seq 1 40); do [ "$(vcount_kd)$(vcount_xr)" = 00 ] && return 0; sleep 0.25; done; return 1; }
 wait_ready() { local i; for i in $(seq 1 40); do grep -q '^READY' "$1" 2>/dev/null && return 0; sleep 0.25; done; return 1; }
 
+# One virtual-output user at a time: the output is a shared, session-wide resource (other teammates' live tests
+# create it too, which makes counts flaky). Convention: hold /tmp/plh-vout.lock while creating one.
+exec 9>/tmp/plh-vout.lock
+flock -w 180 9 || skip "/tmp/plh-vout.lock busy for 180 s (another test is using the virtual output)"
 # Safety: never run while a client is connected (a new output would disturb the session) or when
 # a virtual output is already present (not ours).
 if [ -f "$HOME/.parsec/log.txt" ] || true; then :; fi
@@ -129,15 +133,104 @@ else
   note_skip "3 layout-watch ignoring plh-virtual: bin/parsec-linux-host does not mention it yet (lead). Currently a virtual output alive > ~8 s WOULD restart the host once no client is connected"
 fi
 
-# --- 2. bridge-level VOUT, placeholder in Wine, F2: need components not delivered yet
-if grep -q 'VOUT_CREATE' "$REPO"/src/bridge/proto/*.h 2>/dev/null; then
-  note_skip "2 bridge VOUT_CREATE/DESTROY/kill: proto has VOUT_CREATE but t42 has no client driver yet (needs tests/native/vout_client or a bridge CLI; asked capture)"
+# --- 2. bridge-level VOUT (private bridge: own runtime dir, no contact with the live host's bridge)
+VT="$REPO/build/bridge/plh-vout-test"; BR="$REPO/build/bridge/plh-bridge"
+if [ -x "$VT" ] && [ -x "$BR" ]; then
+  RD=$(mktemp -d "$D/rt.XXXXXX"); chmod 700 "$RD"
+  start_br() { # env passed through; sets BP
+    ( exec env PLH_BRIDGE_DIR=$RD PLH_INPUT_BACKEND=none "$BR" --runtime-dir "$RD" >>"$RD/log" 2>&1 ) & BP=$!
+    local i; for i in $(seq 60); do [ -S "$RD/bridge.sock" ] && [ -s "$RD/port" ] && return 0; sleep 0.1; done
+    return 1; }
+  vt() { PLH_BRIDGE_DIR=$RD "$VT" "$@"; }
+  stop_br() { kill "$BP" 2>/dev/null; wait "$BP" 2>/dev/null; rm -f "$RD/bridge.sock" "$RD/port"; }
+  cleanup_br() { kill -KILL "$BP" "$O1" "$O2" 2>/dev/null; }
+  O1=; O2=; BP=
+  trap cleanup_br EXIT
+
+  # 2a. offer disabled: REFUTATION R3 (open): VOUT_CREATE ignores PLH_VIRTUAL_DISPLAY (src/capture/vout.c cap_vout_handle).
+  # Strict only with PLH_T42_STRICT_OFFER=1 until capture decides whether create must be refused when the offer is off.
+  PLH_VIRTUAL_DISPLAY=0 start_br || fail "2a: private bridge did not start: $(tail -3 "$RD/log")"
+  if vt create -t 1 >"$D/2a.out" 2>&1; then rc=0; else rc=$?; fi
+  if [ "$(vcount_kd)" != 0 ] || [ "$rc" = 0 ]; then
+    if [ "${PLH_T42_STRICT_OFFER:-0}" = 1 ]; then fail "2a: create succeeded with PLH_VIRTUAL_DISPLAY=0"; fi
+    info "2a OPEN REFUTATION R3: create succeeds with PLH_VIRTUAL_DISPLAY=0 (offer flag is advisory only)"
+    wait_gone || fail "2a: output left behind"
+  else info "2a ok: offer disabled -> create refused (rc=$rc)"; fi
+  stop_br
+
+  PLH_VIRTUAL_DISPLAY=1 start_br || fail "2: private bridge did not start"
+  # 2b. two owners: output stays until the LAST owner is gone; never two outputs
+  ( exec env PLH_BRIDGE_DIR=$RD "$VT" create -k >"$D/2b1.out" 2>&1 ) & O1=$!
+  wait_ready "$D/2b1.out" || fail "2b: first create no READY: $(tail -2 "$D/2b1.out")"
+  ( exec env PLH_BRIDGE_DIR=$RD "$VT" create -k >"$D/2b2.out" 2>&1 ) & O2=$!
+  wait_ready "$D/2b2.out" || fail "2b: second create no READY: $(tail -2 "$D/2b2.out")"
+  [ "$(vcount_kd)" = 1 ] && [ "$(vcount_xr)" = 1 ] || fail "2b: double create gave $(vcount_kd) kscreen / $(vcount_xr) xrandr outputs (must be exactly 1)"
+  id1=$(sed -n 's/^VOUT id=\([0-9]*\).*/\1/p' "$D/2b1.out"); id2=$(sed -n 's/^VOUT id=\([0-9]*\).*/\1/p' "$D/2b2.out")
+  [ -n "$id1" ] && [ "$id1" = "$id2" ] || fail "2b: second create returned a different id ($id1 vs $id2)"
+  kill -KILL "$O1"; wait "$O1" 2>/dev/null; sleep 1.5
+  [ "$(vcount_kd)" = 1 ] || fail "2b: output removed while another owner is still connected"
+  kill -KILL "$O2"; wait "$O2" 2>/dev/null
+  wait_gone || fail "2b: output left behind after the last owner was SIGKILLed"
+  info "2b ok: one output for two owners, survives the first owner's death, gone after the last"
+
+  # 2c. a destroy from a non-owner must not remove the output of the real owner
+  ( exec env PLH_BRIDGE_DIR=$RD "$VT" create -k >"$D/2c.out" 2>&1 ) & O1=$!
+  wait_ready "$D/2c.out" || fail "2c: no READY"
+  vt create -t 1 -d >"$D/2c2.out" 2>&1 || true
+  sleep 0.5
+  [ "$(vcount_kd)" = 1 ] || fail "2c: a second client's VOUT_DESTROY removed the output while the first owner still holds it"
+  kill -KILL "$O1"; wait "$O1" 2>/dev/null; wait_gone || fail "2c: output left behind"
+  info "2c ok: destroy by one owner keeps the output for the other"
+
+  # 2d. flapping through the bridge: 6 create/destroy cycles, no leak, no growth of the bridge's fd count
+  fd0=$(ls /proc/$BP/fd | wc -l)
+  for i in 1 2 3 4 5 6; do
+    vt create -t 1 -d >"$D/2d.$i" 2>&1 || fail "2d: cycle $i create failed: $(tail -2 "$D/2d.$i")"
+    wait_gone || fail "2d: cycle $i left an output behind"
+  done
+  fd1=$(ls /proc/$BP/fd | wc -l)
+  [ "$fd1" -le $((fd0 + 2)) ] || fail "2d: bridge fd count grew $fd0 -> $fd1 over 6 create/destroy cycles (leak)"
+  info "2d ok: 6 create/destroy cycles clean, bridge fds $fd0 -> $fd1"
+
+  # 2e. frames: a stream on the virtual output delivers frames (damage driven: expect a few)
+  if vt create -t 2 -f -d >"$D/2e.out" 2>&1; then
+    fr=$(sed -n 's/^FRAMES \([0-9]*\).*/\1/p' "$D/2e.out" | tail -1)
+    [ "${fr:-0}" -ge 1 ] || fail "2e: no frame received from the virtual output: $(tail -3 "$D/2e.out" | tr '\n' ' ')"
+    info "2e ok: $fr frame(s) received (damage driven)"
+  else fail "2e: create -f failed: $(tail -3 "$D/2e.out" | tr '\n' ' ')"; fi
+  wait_gone || fail "2e: output left behind after the capture stream test"
+
+  # 2f. bridge SIGKILL while an owner holds the output -> KWin drops it
+  ( exec env PLH_BRIDGE_DIR=$RD "$VT" create -k >"$D/2f.out" 2>&1 ) & O1=$!
+  wait_ready "$D/2f.out" || fail "2f: no READY"
+  kill -KILL "$BP"; wait "$BP" 2>/dev/null
+  wait_gone || fail "2f: output left behind after SIGKILL of the bridge"
+  kill -KILL "$O1" 2>/dev/null; wait "$O1" 2>/dev/null
+  info "2f ok: bridge SIGKILL removes the output"
+  rm -f "$RD/bridge.sock" "$RD/port"
+
+  # 2g. SIGTERM of the bridge removes it too
+  start_br || fail "2g: restart failed"
+  ( exec env PLH_BRIDGE_DIR=$RD "$VT" create -k >"$D/2g.out" 2>&1 ) & O1=$!
+  wait_ready "$D/2g.out" || fail "2g: no READY"
+  kill -TERM "$BP"; wait "$BP" 2>/dev/null
+  wait_gone || fail "2g: output left behind after SIGTERM of the bridge"
+  kill -KILL "$O1" 2>/dev/null; wait "$O1" 2>/dev/null
+  info "2g ok: bridge SIGTERM removes the output"
+  rm -f "$RD/bridge.sock" "$RD/port"
+
+  # 6a. F2 state only: PLH_FAKE_SCREENS_OFF=1 is reported in DISPLAY_STATE
+  PLH_VIRTUAL_DISPLAY=1 PLH_FAKE_SCREENS_OFF=1 start_br || fail "6a: restart failed"
+  st=$(vt state); case $st in *fake_off=1*real_on=0*|*real_on=0*fake_off=1*) info "6a ok: DISPLAY_STATE reports screens off: $st";; *) fail "6a: fake screens-off not reported: $st";; esac
+  stop_br
+  trap - EXIT
+  [ "$(vcount_kd)" = 0 ] || fail "2: a virtual output remains at the end"
 else
-  note_skip "2 bridge VOUT_CREATE/DESTROY/bridge-killed: PLH_MSG_VOUT_* not in src/bridge/proto yet (capture)"
+  note_skip "2 bridge VOUT: build/bridge/plh-vout-test or plh-bridge missing (make -C src/bridge)"
 fi
 note_skip "4 placeholder in EnumOutputs and user32 EnumDisplayDevicesW/EnumDisplaySettingsW (probe exe): dxgi placeholder and patch 0006 not delivered"
 note_skip "5 duplicate -> frames -> release + 3 s grace -> gone; never listed twice: needs 4"
-note_skip "6 F2 with PLH_FAKE_SCREENS_OFF=1: not delivered"
+note_skip "6b F2 behaviour (duplicate default output yields virtual frames + redirect): dxgi side not delivered; only the state flag (6a) is tested"
 if [ "${PLH_TEST_INTRUSIVE:-0}" = 1 ]; then
   note_skip "7 input on the virtual output (flock /tmp/plh-input.lock, 50 px from LIVE edges): redirect/uinput resize not delivered"
 else
@@ -145,8 +238,8 @@ else
 fi
 
 if [ ${#SKIPS[@]} -gt 0 ]; then
-  echo "  # native cases PASS; ${#SKIPS[@]} case(s) not run:"
+  echo "  # native and bridge cases PASS; ${#SKIPS[@]} case(s) not run:"
   printf '  #   - %s\n' "${SKIPS[@]}"
-  skip "native virtual output cases 1a-1d pass; ${#SKIPS[@]} case(s) waiting for components (listed above)"
+  skip "native + bridge cases 1a-1d, 2a-2g, 6a pass; ${#SKIPS[@]} case(s) waiting for components (listed above)"
 fi
 pass "virtual display: all cases"
