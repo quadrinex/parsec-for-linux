@@ -35,6 +35,10 @@ enum plh_msg_type_capture {
     PLH_MSG_CAP_CURSOR       = 0x0106, /* D->C event plh_cap_cursor */
     PLH_MSG_CAP_STATE        = 0x0107, /* D->C event plh_cap_state */
     PLH_MSG_CAP_STATS        = 0x0108, /* C->D plh_cap_stream_ref; reply plh_cap_stats */
+    /* virtual display (see plh_proto_vdisplay.h) */
+    PLH_MSG_VOUT_CREATE      = 0x0110, /* C->D plh_vout_create; reply plh_vout_create_reply */
+    PLH_MSG_VOUT_DESTROY     = 0x0111, /* C->D plh_vout_ref; empty reply */
+    PLH_MSG_DISPLAY_STATE    = 0x0112, /* C->D empty; reply plh_display_state. Also sent as an event on change */
 };
 
 enum plh_cap_backend {
@@ -46,6 +50,7 @@ enum plh_cap_backend {
 };
 
 #define PLH_CAP_OUTPUT_PRIMARY 0x1
+#define PLH_CAP_OUTPUT_VIRTUAL 0x2 /* output created by VOUT_CREATE (KWin "plh-virtual") */
 
 struct plh_cap_output {
     uint32_t output_id;          /* stable during the daemon lifetime */
@@ -175,5 +180,7 @@ struct plh_cap_shm_header {
     uint64_t slot_offset, cursor_offset;
     uint32_t cursor_size, cursor_max;
 };
+
+#include "plh_proto_vdisplay.h"
 
 #endif /* PLH_PROTO_CAPTURE_H */

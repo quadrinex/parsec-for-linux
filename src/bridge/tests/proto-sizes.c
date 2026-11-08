@@ -19,6 +19,8 @@ int main(void)
     S(plh_cap_release); S(plh_cap_cursor); O(plh_cap_cursor, pts_ns); O(plh_cap_cursor, hot_y);
     S(plh_cap_state); S(plh_cap_stats); O(plh_cap_stats, frames_captured);
     S(plh_cap_shm_header); O(plh_cap_shm_header, slot_offset); O(plh_cap_shm_header, cursor_max);
+    S(plh_vout_create); S(plh_vout_create_reply); O(plh_vout_create_reply, name); S(plh_vout_ref);
+    S(plh_display_state); O(plh_display_state, real_right); S(plh_redirect); S(plh_input_redirect_hdr);
     S(plh_input_ev);
     S(plh_input_events_hdr);
     S(plh_input_status);
