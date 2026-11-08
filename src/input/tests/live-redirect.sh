@@ -55,6 +55,8 @@ export PLH_CAPTURE_BACKEND=kwin PLH_INPUT_BACKEND=uinput PLH_BRIDGE_DIR=$RD
 export PLH_VIRTUAL_DISPLAY=0 PLH_VIRTUAL_DISPLAY_AUTO=1 PLH_FAKE_SCREENS_OFF=1
 build/bridge/plh-bridge --runtime-dir $RD -v > $d/redirect.bridge.log 2>&1 6>&- 7>&- 8>&- & bridge_pid=$!
 for _ in $(seq 50); do [ -S $RD/bridge.sock ] && [ -s $RD/port ] && break; sleep 0.1; done
+# The bridge logs its services just after creating the socket: wait for the line, not just the files.
+for _ in $(seq 100); do grep -q 'service input: active' $d/redirect.bridge.log && break; sleep 0.1; done
 grep -q 'service input: active' $d/redirect.bridge.log || bail "input service not active in the private bridge"
 
 python3 "$here/testwin.py" --timeout 90 > "$d/tw.log" 2>&1 6>&- 7>&- 8>&- & twpid=$!
