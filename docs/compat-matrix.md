@@ -42,6 +42,7 @@ Three statuses, no others: **tested here** (test run on the reference machine, s
 | GNOME (Wayland or X11) | **not tested** | no GNOME session available |
 | wlroots (Sway, Hyprland) | **not tested** | `wlr-randr`/`swaymsg` detection verified on sample outputs only; wlroots keyboard/mouse (wlr-virtual-pointer) not done |
 | Input through libei (RemoteDesktop portal) | **not tested** | `ei.c` compiled, outside the build; XTest not done |
+| Virtual display on demand (KWin `stream_virtual_output`) | **in progress, KWin only** | t42: native output create/destroy/SIGKILL/no config growth pass; placeholder in Wine, bridge VOUT, F2 not delivered/tested. GNOME and wlroots: **not supported** (no equivalent protocol used) |
 | Gamepads (ViGEmBus-compatible driver under Wine → relay → uinput Xbox 360 pad) | **tested here with a probe only; not tested with a real Parsec client** | t31: e2e (buttons, D-pad, sticks, triggers, removal), hostile IOCTLs refused, no pad leaked after a killed relay; the client side is our own probe (padprobe.exe), not Parsec |
 | x264 software encoding (no GPU) | **tested here** (CPU inputs, H.264) | `make -C src/encode test`; software HEVC and the DMA-BUF→x264 path not covered |
 | Intel GPU (VA-API iHD) | **not tested** | no Intel machine |
