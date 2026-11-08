@@ -88,10 +88,19 @@ static int create(struct plh_client *c, const struct plh_vout_create *rq, struct
         int rc = cap_kwin_vout_start(PLH_VOUT_NAME, PLH_VOUT_DESCRIPTION, w, h, lost);
         if (rc) return rc;
         /* the output shows up asynchronously: poll the compositor (<= 3 s) */
-        int ok = 0;
-        for (int i = 0; i < 60 && !ok && cap_kwin_vout_alive(); i++) {
-            ok = find_virtual(&cur);
-            if (!ok) { struct timespec ts = { 0, 50 * 1000000L }; nanosleep(&ts, NULL); }
+        /* KWin first shows the output at 0,0 and then moves it right of the others: wait until the rect is
+         * stable for 3 consecutive polls (or give up waiting after 3 s and report the last rect) */
+        int ok = 0, stable = 0;
+        struct plh_vout_create_reply prev = { 0 };
+        for (int i = 0; i < 60 && stable < 3 && cap_kwin_vout_alive(); i++) {
+            struct plh_vout_create_reply now = { 0 };
+            if (find_virtual(&now)) {
+                ok = 1;
+                cur = now;
+                stable = (now.x == prev.x && now.y == prev.y && now.width == prev.width && now.height == prev.height) ? stable + 1 : 0;
+                prev = now;
+            }
+            if (stable < 3) { struct timespec ts = { 0, 100 * 1000000L }; nanosleep(&ts, NULL); }
         }
         if (!ok) { cap_kwin_vout_stop(); memset(&cur, 0, sizeof cur); return PLH_E_IO; }
         PLH_INFO(MOD, "virtual output created: %s %d,%d %ux%u", cur.name, cur.x, cur.y, cur.width, cur.height);

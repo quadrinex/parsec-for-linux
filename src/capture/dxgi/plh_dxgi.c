@@ -10,7 +10,7 @@
 #define INITGUID
 #include <windows.h>
 #include <d3d11.h>
-#include <dxgi1_5.h>
+#include <dxgi1_6.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -59,6 +59,8 @@ static FARPROC real(const char *name)
 
 /* ---------- bridge ---------- */
 struct dup;
+static void vout_unref(void);
+static int is_placeholder(void *o);
 static CRITICAL_SECTION g_lock;      /* protects g_dups, g_conn */
 static struct dup *g_dups[MAXDUP];
 static struct plh_conn *g_conn;
@@ -86,6 +88,7 @@ struct dup {
     int cur_visible; int cur_x, cur_y, cur_hot_x, cur_hot_y; uint32_t cur_w, cur_h;
     uint8_t *shape; int shape_known, shape_dirty;
     uint32_t rep_state;
+    int virt;                      /* duplicates the bridge virtual output (holds a vout reference) */
 };
 #define DUP(p) ((struct dup *)(p))
 
@@ -198,6 +201,7 @@ static ULONG STDMETHODCALLTYPE d_Release(IDXGIOutputDuplication *s)
     if (d->mt) ID3D10Multithread_Release(d->mt);
     if (d->ctx) ID3D11DeviceContext_Release(d->ctx);
     if (d->dev) ID3D11Device_Release(d->dev);
+    if (d->virt) vout_unref();
     DeleteCriticalSection(&d->cs);
     free(d->shape); free(d);
     return 0;
@@ -325,7 +329,7 @@ static const IDXGIOutputDuplicationVtbl g_dvtbl = {
 /* ---------- matching DXVK output <-> bridge output ---------- */
 /* Windows translation = KWin - T, with T such that all DXVK outputs (Windows view) coincide
  * with the bridge outputs (KWin view): derived from the real layout, never hard-coded. */
-static int match_output(IDXGIOutput *out, const struct plh_cap_output *bo, int nb, int *which)
+static int match_output(IDXGIOutput *out, const struct plh_cap_output *bo, int nb, int *which, int *txo, int *tyo)
 {
     DXGI_OUTPUT_DESC me;
     if (FAILED(IDXGIOutput_GetDesc(out, &me))) return 0;
@@ -337,7 +341,7 @@ static int match_output(IDXGIOutput *out, const struct plh_cap_output *bo, int n
             IDXGIOutput *o = NULL;
             if (IDXGIAdapter_EnumOutputs(ad, i, &o) != S_OK) break;
             DXGI_OUTPUT_DESC dd;
-            if (SUCCEEDED(IDXGIOutput_GetDesc(o, &dd))) all[na++] = dd.DesktopCoordinates;
+            if (!is_placeholder(o) && SUCCEEDED(IDXGIOutput_GetDesc(o, &dd))) all[na++] = dd.DesktopCoordinates;
             IDXGIOutput_Release(o);
         }
         IDXGIAdapter_Release(ad);
@@ -353,10 +357,225 @@ static int match_output(IDXGIOutput *out, const struct plh_cap_output *bo, int n
             if (f < 0) ok = 0;
             else if (all[i].left == mr.left && all[i].top == mr.top) hit = f;
         }
-        if (ok && hit >= 0) { *which = hit; plog("Windows->KWin translation = (%d,%d)", tx, ty); return 1; }
+        if (ok && hit >= 0) { *which = hit; if (txo) *txo = tx; if (tyo) *tyo = ty; plog("Windows->KWin translation = (%d,%d)", tx, ty); return 1; }
     }
     /* fallback: rank by increasing position among the outputs, if the counts match */
     return 0;
+}
+
+/* ---------- virtual display placeholder (F1) ---------- */
+/* When the bridge offers the virtual display (PLH_VIRTUAL_DISPLAY=1) and Wine does not list the real output yet,
+ * EnumOutputs appends a placeholder: a pinned second instance of DXVK's output 0 whose GetDesc/GetDesc1 are
+ * overridden (rect right of Wine's desktop, device name after the last one). DuplicateOutput on it asks the bridge
+ * for the KWin virtual output. Once Wine lists the real output (S5: it follows live) the placeholder is dropped
+ * and match_output() maps that DXVK output to the virtual bridge output. */
+typedef HRESULT (STDMETHODCALLTYPE *enumout_fn)(IDXGIAdapter *, UINT, IDXGIOutput **);
+typedef HRESULT (STDMETHODCALLTYPE *getdesc_fn)(IDXGIOutput *, DXGI_OUTPUT_DESC *);
+typedef HRESULT (STDMETHODCALLTYPE *getdesc1_fn)(IDXGIOutput6 *, DXGI_OUTPUT_DESC1 *);
+static enumout_fn g_orig_enumout;
+static getdesc_fn g_orig_getdesc;
+static getdesc1_fn g_orig_getdesc1;
+static IDXGIAdapter *g_adapter;               /* pinned DXVK adapter 0 */
+static IDXGIOutput *g_ph;                     /* pinned placeholder object */
+static struct vd_state { int active; RECT rect; WCHAR name[32]; DWORD hz; int real_listed; } g_vd;  /* guarded by g_lock */
+static LONG g_vout_users;
+static LONG g_grace_gen;
+static volatile LONG g_watch_started;
+
+static int is_placeholder(void *o) { return o && o == (void *)g_ph; }
+
+static HRESULT STDMETHODCALLTYPE my_GetDesc(IDXGIOutput *s, DXGI_OUTPUT_DESC *d)
+{
+    HRESULT hr = g_orig_getdesc(s, d);
+    if (SUCCEEDED(hr) && is_placeholder(s)) {
+        glock();
+        wcscpy(d->DeviceName, g_vd.name);
+        d->DesktopCoordinates = g_vd.rect;
+        d->AttachedToDesktop = TRUE;
+        d->Rotation = DXGI_MODE_ROTATION_IDENTITY;
+        d->Monitor = NULL;
+        LeaveCriticalSection(&g_lock);
+    }
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE my_GetDesc1(IDXGIOutput6 *s, DXGI_OUTPUT_DESC1 *d)
+{
+    HRESULT hr = g_orig_getdesc1(s, d);
+    if (SUCCEEDED(hr) && is_placeholder(s)) {
+        glock();
+        wcscpy(d->DeviceName, g_vd.name);
+        d->DesktopCoordinates = g_vd.rect;
+        d->AttachedToDesktop = TRUE;
+        d->Rotation = DXGI_MODE_ROTATION_IDENTITY;
+        d->Monitor = NULL;
+        LeaveCriticalSection(&g_lock);
+    }
+    return hr;
+}
+
+static HRESULT STDMETHODCALLTYPE my_EnumOutputs(IDXGIAdapter *s, UINT i, IDXGIOutput **o)
+{
+    HRESULT hr = g_orig_enumout(s, i, o);
+    if (hr != DXGI_ERROR_NOT_FOUND) return hr;
+    glock();
+    int act = g_vd.active;
+    LeaveCriticalSection(&g_lock);
+    if (!act) return hr;
+    if (i > 0) {                                  /* the placeholder directly follows the last real output */
+        IDXGIOutput *prev = NULL;
+        if (g_orig_enumout(s, i - 1, &prev) != S_OK) return hr;
+        IDXGIOutput_Release(prev);
+    }
+    glock();
+    if (!g_ph) {
+        IDXGIOutput *base = NULL;
+        if (g_orig_enumout(s, 0, &base) == S_OK) g_ph = base;   /* keep our reference: pinned forever */
+    }
+    IDXGIOutput *ph = g_ph;
+    if (ph) IDXGIOutput_AddRef(ph);
+    LeaveCriticalSection(&g_lock);
+    if (!ph) return hr;
+    *o = ph;
+    return S_OK;
+}
+
+static int count_monitors_cb(HMONITOR m, HDC dc, LPRECT r, LPARAM p) { (void)m; (void)dc; (void)r; (*(int *)p)++; return TRUE; }
+
+static void vd_registry(const struct vd_state *v, int offered)
+{
+    static struct vd_state last; static int last_off = -1, last_valid;
+    HKEY k;
+    if (!offered) {
+        if (last_valid || last_off != 1) {
+            RegDeleteKeyW(HKEY_LOCAL_MACHINE, L"Software\\Wine\\PlhVirtualDisplay");
+            if (last_valid && RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Wine\\PlhMonitorNames", 0, KEY_WRITE, &k) == ERROR_SUCCESS) {
+                WCHAR old[40]; _snwprintf(old, 40, L"%ld,%ld", last.rect.left, last.rect.top);
+                RegDeleteValueW(k, old); RegCloseKey(k);
+            }
+            last_valid = 0; last_off = 1;
+        }
+        return;
+    }
+    if (last_valid && !memcmp(&last, v, sizeof last)) return;
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Wine\\PlhVirtualDisplay", 0, NULL, 0, KEY_WRITE, NULL, &k, NULL) != ERROR_SUCCESS) {
+        plog("virtual display: cannot write the registry key (%lu)", GetLastError());
+        return;
+    }
+    DWORD l = (DWORD)v->rect.left, t = (DWORD)v->rect.top, w = (DWORD)(v->rect.right - v->rect.left), h = (DWORD)(v->rect.bottom - v->rect.top);
+    DWORD act = v->real_listed ? 1 : 0;
+    RegSetValueExW(k, L"DeviceName", 0, REG_SZ, (const BYTE *)v->name, (DWORD)((wcslen(v->name) + 1) * sizeof(WCHAR)));
+    RegSetValueExW(k, L"Left", 0, REG_DWORD, (const BYTE *)&l, 4);
+    RegSetValueExW(k, L"Top", 0, REG_DWORD, (const BYTE *)&t, 4);
+    RegSetValueExW(k, L"Width", 0, REG_DWORD, (const BYTE *)&w, 4);
+    RegSetValueExW(k, L"Height", 0, REG_DWORD, (const BYTE *)&h, 4);
+    RegSetValueExW(k, L"RefreshHz", 0, REG_DWORD, (const BYTE *)&v->hz, 4);
+    RegSetValueExW(k, L"Active", 0, REG_DWORD, (const BYTE *)&act, 4);
+    RegCloseKey(k);
+    WCHAR nm[40];                                 /* patch 0005 mechanism: monitor name keyed by "Left,Top" */
+    _snwprintf(nm, 40, L"%ld,%ld", v->rect.left, v->rect.top);
+    if (last_valid && (last.rect.left != v->rect.left || last.rect.top != v->rect.top)) {
+        WCHAR old[40]; _snwprintf(old, 40, L"%ld,%ld", last.rect.left, last.rect.top);
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Wine\\PlhMonitorNames", 0, KEY_WRITE, &k) == ERROR_SUCCESS) { RegDeleteValueW(k, old); RegCloseKey(k); }
+    }
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Wine\\PlhMonitorNames", 0, NULL, 0, KEY_WRITE, NULL, &k, NULL) == ERROR_SUCCESS) {
+        RegSetValueExW(k, nm, 0, REG_SZ, (const BYTE *)L"Virtual display", sizeof L"Virtual display");
+        RegCloseKey(k);
+    }
+    last = *v; last_valid = 1; last_off = 0;
+    plog("virtual display registry: %ls %ld,%ld %lux%lu %luHz Active=%lu", v->name, v->rect.left, v->rect.top, w, h, v->hz, act);
+}
+
+static int match_output(IDXGIOutput *out, const struct plh_cap_output *bo, int nb, int *which, int *txo, int *tyo);
+
+/* Asks the bridge for the settings and the real layout and updates the placeholder. Never called from the
+ * EnumOutputs hook (no recursion); runs at startup and from the watcher thread. */
+static void vd_refresh(void)
+{
+    struct plh_conn *c = bridge();
+    if (!c || !g_adapter) return;
+    struct plh_display_state st; uint32_t n = 0;
+    if (plh_conn_request(c, PLH_MSG_DISPLAY_STATE, NULL, 0, &st, sizeof st, &n, 3000)) return;
+    if (!(st.flags & PLH_DS_OFFER)) {
+        glock(); g_vd.active = 0; LeaveCriticalSection(&g_lock);
+        vd_registry(NULL, 0);
+        return;
+    }
+    int nwine = 0;
+    EnumDisplayMonitors(NULL, NULL, count_monitors_cb, (LPARAM)&nwine);
+    int real_listed = nwine > (int)st.real_total;   /* Wine lists one more monitor than the real outputs: never offer a second one */
+    /* Windows -> KWin translation from the real layout */
+    int tx = 0, ty = 0, which = -1, have_t = 0;
+    uint8_t lbuf[sizeof(struct plh_cap_output_list) + 16 * sizeof(struct plh_cap_output)];
+    uint32_t ll = 0;
+    IDXGIOutput *o0 = NULL;
+    if (g_orig_enumout(g_adapter, 0, &o0) == S_OK) {
+        if (!plh_conn_request(c, PLH_MSG_CAP_LIST_OUTPUTS, NULL, 0, lbuf, sizeof lbuf, &ll, 5000)) {
+            const struct plh_cap_output_list *lst = (void *)lbuf;
+            have_t = lst->count && match_output(o0, (const void *)(lbuf + sizeof *lst), (int)lst->count, &which, &tx, &ty);
+        }
+        IDXGIOutput_Release(o0);
+    }
+    if (!have_t) { plog("virtual display: cannot derive the Windows->KWin translation, placeholder not offered"); glock(); g_vd.active = 0; LeaveCriticalSection(&g_lock); return; }
+    struct vd_state v = { 0 };
+    int w = (int)st.mode_width, h = (int)st.mode_height;
+    int kx = st.real_right, ky = 0;
+    if (st.virtual_active) { kx = st.vx; ky = st.vy; w = (int)st.vwidth; h = (int)st.vheight; }
+    v.rect = (RECT){ kx - tx, ky - ty, kx - tx + w, ky - ty + h };
+    v.hz = st.mode_refresh_mhz / 1000;
+    v.real_listed = real_listed;
+    _snwprintf(v.name, 32, L"\\\\.\\DISPLAY%d", real_listed ? nwine : nwine + 1);
+    v.active = !real_listed;
+    glock();
+    int was = g_vd.active;
+    g_vd = v;
+    LeaveCriticalSection(&g_lock);
+    if (!was && v.active) plog("virtual display offered: %ls %ld,%ld %dx%d", v.name, v.rect.left, v.rect.top, w, h);
+    vd_registry(&v, 1);
+}
+
+static DWORD WINAPI vd_watcher(void *p)
+{
+    (void)p;
+    for (;;) { Sleep(1000); vd_refresh(); }
+    return 0;
+}
+
+static VOID CALLBACK grace_cb(PVOID p, BOOLEAN fired)
+{
+    (void)fired;
+    glock();
+    if (g_vout_users == 0 && (LONG)(intptr_t)p == g_grace_gen && g_conn) {
+        struct plh_vout_ref ref = { 0, 0 };
+        int r = plh_conn_request(g_conn, PLH_MSG_VOUT_DESTROY, &ref, sizeof ref, NULL, 0, NULL, 3000);
+        plog("virtual output released after the grace period (%d)", r);
+    }
+    LeaveCriticalSection(&g_lock);
+}
+
+static void vout_unref(void)
+{
+    glock();
+    if (--g_vout_users <= 0) {
+        g_vout_users = 0;
+        HANDLE t;
+        g_grace_gen++;
+        CreateTimerQueueTimer(&t, NULL, grace_cb, (PVOID)(intptr_t)g_grace_gen, 3000, 0, WT_EXECUTEONLYONCE);
+    }
+    LeaveCriticalSection(&g_lock);
+}
+
+/* VOUT_CREATE (or join the existing output) and take a reference; reply in *vr */
+static int vout_ref(struct plh_conn *c, struct plh_vout_create_reply *vr)
+{
+    glock();
+    g_grace_gen++;                                /* cancels a pending destroy */
+    g_vout_users++;
+    LeaveCriticalSection(&g_lock);
+    struct plh_vout_create rq = { 0, 0, 0, 0 };
+    uint32_t n = 0;
+    int r = plh_conn_request(c, PLH_MSG_VOUT_CREATE, &rq, sizeof rq, vr, sizeof *vr, &n, 15000);
+    if (r) { plog("VOUT_CREATE failed (%d)", r); vout_unref(); }
+    return r;
 }
 
 static HRESULT do_duplicate(IDXGIOutput *out, IUnknown *device, const char *variant, IDXGIOutputDuplication **pdup)
@@ -375,14 +594,29 @@ static HRESULT do_duplicate(IDXGIOutput *out, IUnknown *device, const char *vari
     if (plh_conn_request(c, PLH_MSG_CAP_LIST_OUTPUTS, NULL, 0, lbuf, sizeof lbuf, &ll, 5000)) { ID3D11Device_Release(dev); return DXGI_ERROR_UNSUPPORTED; }
     const struct plh_cap_output_list *lst = (void *)lbuf;
     const struct plh_cap_output *bo = (void *)(lbuf + sizeof *lst);
-    int which = -1;
-    if (!lst->count || !match_output(out, bo, (int)lst->count, &which)) {
+    int which = -1, virt = 0;
+    struct plh_cap_output phout;
+    if (is_placeholder(out)) {                    /* the "Virtual display" entry: create the KWin output */
+        struct plh_vout_create_reply vr;
+        if (vout_ref(c, &vr)) { ID3D11Device_Release(dev); return DXGI_ERROR_UNSUPPORTED; }
+        memset(&phout, 0, sizeof phout);
+        phout.output_id = vr.output_id; phout.x = vr.x; phout.y = vr.y; phout.width = vr.width; phout.height = vr.height;
+        phout.refresh_mhz = vr.refresh_mhz; phout.flags = PLH_CAP_OUTPUT_VIRTUAL;
+        snprintf(phout.name, sizeof phout.name, "%s", vr.name);
+        virt = 1; which = 0;
+        bo = &phout;
+    } else if (!lst->count || !match_output(out, bo, (int)lst->count, &which, NULL, NULL)) {
         plog("%s: no bridge output matches", variant);
         ID3D11Device_Release(dev);
         return DXGI_ERROR_UNSUPPORTED;
+    } else if (bo[which].flags & PLH_CAP_OUTPUT_VIRTUAL) {   /* Wine now lists the real virtual output */
+        struct plh_vout_create_reply vr;
+        if (vout_ref(c, &vr)) { ID3D11Device_Release(dev); return DXGI_ERROR_UNSUPPORTED; }
+        virt = 1;
     }
     struct dup *d = calloc(1, sizeof *d);
-    if (!d) { ID3D11Device_Release(dev); return E_OUTOFMEMORY; }
+    if (!d) { if (virt) vout_unref(); ID3D11Device_Release(dev); return E_OUTOFMEMORY; }
+    d->virt = virt;
     d->iface.lpVtbl = (IDXGIOutputDuplicationVtbl *)&g_dvtbl; d->ref = 1; d->dev = dev;
     InitializeCriticalSection(&d->cs); InitializeConditionVariable(&d->cv);
     struct plh_cap_open op = { bo[which].output_id, PLH_CAP_BACKEND_AUTO, PLH_CAP_F_CURSOR_METADATA, 0, 4, PLH_FMT_BGRA8 };
@@ -419,6 +653,7 @@ fail:
     if (d->mt) ID3D10Multithread_Release(d->mt);
     if (d->ctx) ID3D11DeviceContext_Release(d->ctx);
     ID3D11Device_Release(dev);
+    if (d->virt) vout_unref();
     DeleteCriticalSection(&d->cs); free(d);
     return DXGI_ERROR_UNSUPPORTED;
 }
@@ -476,7 +711,23 @@ static void install_patch(IUnknown *factory)
                 patch_slot(vt5, i5, (void *)my_DuplicateOutput1, (void **)&g_orig_dup1);
                 IDXGIOutput5_Release(o5);
             }
-            plog("DXVK output vtable patched (Output1%s)", g_orig_dup1 ? " + Output5" : "");
+            patch_slot(vt, offsetof(IDXGIOutputVtbl, GetDesc) / sizeof(void *), (void *)my_GetDesc, (void **)&g_orig_getdesc);
+            IDXGIOutput6 *o6 = NULL;
+            if (SUCCEEDED(IDXGIOutput1_QueryInterface(o1, &IID_IDXGIOutput6, (void **)&o6))) {
+                void **vt6 = *(void ***)o6;
+                patch_slot(vt6, offsetof(IDXGIOutput6Vtbl, GetDesc1) / sizeof(void *), (void *)my_GetDesc1, (void **)&g_orig_getdesc1);
+                IDXGIOutput6_Release(o6);
+            }
+            void **avt = *(void ***)a;
+            patch_slot(avt, offsetof(IDXGIAdapterVtbl, EnumOutputs) / sizeof(void *), (void *)my_EnumOutputs, (void **)&g_orig_enumout);
+            IDXGIAdapter_AddRef(a);
+            g_adapter = a;
+            plog("DXVK output vtable patched (Output1%s) + GetDesc/GetDesc1 + Adapter::EnumOutputs", g_orig_dup1 ? " + Output5" : "");
+            vd_refresh();
+            if (g_conn && InterlockedCompareExchange(&g_watch_started, 1, 0) == 0) {
+                HANDLE th = CreateThread(NULL, 0, vd_watcher, NULL, 0, NULL);
+                if (th) CloseHandle(th);
+            }
         }
         IDXGIOutput1_Release(o1);
     }
