@@ -33,6 +33,15 @@ static void plog(const char *fmt, ...)
     fputs("plh-dxgi: ", stderr); fputs(b, stderr); fflush(stderr);
 }
 
+/* PLH_DXGI_DIAG=1: per-duplication lifetime, non-S_OK results, GetDesc/GetDesc1/EnumOutputs values (default off) */
+static int g_diag = -1;
+static int diag_on(void)
+{
+    if (g_diag < 0) { char b[8]; g_diag = GetEnvironmentVariableA("PLH_DXGI_DIAG", b, sizeof b) > 0 && b[0] != '0'; }
+    return g_diag;
+}
+#define dlog(...) do { if (diag_on()) plog("DIAG " __VA_ARGS__); } while (0)
+
 /* ---------- real DXVK ---------- */
 typedef HRESULT (WINAPI *pf_cf)(REFIID, void **);
 typedef HRESULT (WINAPI *pf_cf2)(UINT, REFIID, void **);
@@ -91,6 +100,11 @@ struct dup {
     uint32_t rep_state;
     int redirect;                  /* F2: an input redirect was pushed for this duplication */
     int virt;                      /* duplicates the bridge virtual output (holds a vout reference) */
+    /* diagnostics (PLH_DXGI_DIAG) */
+    ULONGLONG t_open, t_first_acq, t_last_acq, t_last_rel;
+    LONG n_acq_ok, n_acq_timeout, n_acq_other, n_relframe, n_relframe_bad, n_dirty, n_move, n_shape, n_other_calls;
+    const char *last_call; DWORD last_tid; DWORD open_tid;
+    char out_name[96]; void *out_obj;
 };
 #define DUP(p) ((struct dup *)(p))
 
@@ -193,6 +207,15 @@ static ULONG STDMETHODCALLTYPE d_Release(IDXGIOutputDuplication *s)
     struct dup *d = DUP(s);
     LONG r = InterlockedDecrement(&d->ref);
     if (r) return (ULONG)r;
+    if (diag_on()) {
+        ULONGLONG now = GetTickCount64();
+        dlog("stream %u (%s, out %p) RELEASED by tid %lu (opened by tid %lu): lifetime %llu ms, acquire ok=%ld timeout=%ld other=%ld, ReleaseFrame ok=%ld bad=%ld, "
+             "dirty=%ld move=%ld shape=%ld; frame held at release=%d; last call %s (tid %lu) %llu ms ago; last acquire %llu ms ago",
+             d->rep.stream_id, d->out_name, d->out_obj, (unsigned long)GetCurrentThreadId(), (unsigned long)d->open_tid, (unsigned long long)(now - d->t_open),
+             d->n_acq_ok, d->n_acq_timeout, d->n_acq_other, d->n_relframe, d->n_relframe_bad, d->n_dirty, d->n_move, d->n_shape, d->acquired,
+             d->last_call ? d->last_call : "(none)", (unsigned long)d->last_tid, (unsigned long long)(now - (d->t_last_acq ? d->t_last_acq : d->t_open)),
+             (unsigned long long)(d->t_last_acq ? now - d->t_last_acq : 0));
+    }
     glock();
     for (int i = 0; i < MAXDUP; i++) if (g_dups[i] == d) g_dups[i] = NULL;
     LeaveCriticalSection(&g_lock);
@@ -221,14 +244,19 @@ static HRESULT STDMETHODCALLTYPE d_Acquire(IDXGIOutputDuplication *s, UINT timeo
     if (!fi || !res) return E_INVALIDARG;
     memset(fi, 0, sizeof *fi); *res = NULL;
     EnterCriticalSection(&d->cs);
-    if (d->acquired) { LeaveCriticalSection(&d->cs); return DXGI_ERROR_INVALID_CALL; }
+    d->last_call = "AcquireNextFrame"; d->last_tid = GetCurrentThreadId();
+    if (d->acquired) { LeaveCriticalSection(&d->cs); d->n_acq_other++; dlog("stream %u AcquireNextFrame -> INVALID_CALL (previous frame not released)", d->rep.stream_id); return DXGI_ERROR_INVALID_CALL; }
     ULONGLONG t0 = GetTickCount64();
     while (!d->have_frame && !(d->mouse_pending && d->got_first) && !d->closing) {
         ULONGLONG el = GetTickCount64() - t0;
-        if (el >= timeout) { LeaveCriticalSection(&d->cs); return DXGI_ERROR_WAIT_TIMEOUT; }
+        if (el >= timeout) {
+            LeaveCriticalSection(&d->cs);
+            if (++d->n_acq_timeout <= 3) dlog("stream %u AcquireNextFrame(%u ms) -> WAIT_TIMEOUT (#%ld, frames so far %ld)", d->rep.stream_id, timeout, d->n_acq_timeout, d->n_acq_ok);
+            return DXGI_ERROR_WAIT_TIMEOUT;
+        }
         SleepConditionVariableCS(&d->cv, &d->cs, (DWORD)(timeout == INFINITE ? INFINITE : timeout - el));
     }
-    if (d->closing) { LeaveCriticalSection(&d->cs); return DXGI_ERROR_ACCESS_LOST; }
+    if (d->closing) { LeaveCriticalSection(&d->cs); d->n_acq_other++; dlog("stream %u AcquireNextFrame -> ACCESS_LOST (closing)", d->rep.stream_id); return DXGI_ERROR_ACCESS_LOST; }
     if (d->have_frame) {
         const uint8_t *px = (const uint8_t *)d->shm.ptr + d->rep.slot_offset + (uint64_t)d->pend_slot * d->rep.slot_size;
         if (d->pend_w == d->desc.ModeDesc.Width && d->pend_h == d->desc.ModeDesc.Height) {
@@ -255,6 +283,13 @@ static HRESULT STDMETHODCALLTYPE d_Acquire(IDXGIOutputDuplication *s, UINT timeo
     UINT nr = d->cur_nrect ? d->cur_nrect : 1;
     fi->TotalMetadataBufferSize = fi->AccumulatedFrames ? nr * sizeof(RECT) : 0;
     d->acquired = 1;
+    d->t_last_acq = GetTickCount64(); if (!d->t_first_acq) d->t_first_acq = d->t_last_acq;
+    d->n_acq_ok++;
+    if (d->n_acq_ok <= 8)
+        dlog("stream %u AcquireNextFrame #%ld ok: accumulated=%u present=%lld mouse=%lld metadata=%u ptr_vis=%d shape_sz=%u have_dirty=%u",
+             d->rep.stream_id, d->n_acq_ok, (unsigned)fi->AccumulatedFrames, (long long)fi->LastPresentTime.QuadPart,
+             (long long)fi->LastMouseUpdateTime.QuadPart, (unsigned)fi->TotalMetadataBufferSize, (int)fi->PointerPosition.Visible,
+             (unsigned)fi->PointerShapeBufferSize, d->cur_nrect);
     LeaveCriticalSection(&d->cs);
     HRESULT qh = ID3D11Texture2D_QueryInterface(d->tex, &IID_IDXGIResource, (void **)res);
     static volatile LONG nq;
@@ -272,6 +307,8 @@ static HRESULT STDMETHODCALLTYPE d_Release_Frame(IDXGIOutputDuplication *s)
     struct dup *d = DUP(s);
     EnterCriticalSection(&d->cs);
     int a = d->acquired; d->acquired = 0;
+    d->last_call = "ReleaseFrame"; d->last_tid = GetCurrentThreadId(); d->t_last_rel = GetTickCount64();
+    if (a) d->n_relframe++; else { d->n_relframe_bad++; dlog("stream %u ReleaseFrame -> INVALID_CALL (no frame held)", d->rep.stream_id); }
     LeaveCriticalSection(&d->cs);
     return a ? S_OK : DXGI_ERROR_INVALID_CALL;
 }
@@ -283,10 +320,12 @@ static HRESULT STDMETHODCALLTYPE d_DirtyRects(IDXGIOutputDuplication *s, UINT ca
     HRESULT hr = S_OK;
     UINT n = d->cur_nrect ? d->cur_nrect : 1, need = n * sizeof(RECT);
     *req = need;
+    d->n_dirty++; d->last_call = "GetFrameDirtyRects";
     if (!d->acquired) hr = DXGI_ERROR_INVALID_CALL;
     else if (cap < need || !buf) hr = DXGI_ERROR_MORE_DATA;
     else if (d->cur_nrect) memcpy(buf, d->cur_rects, need);
     else buf[0] = (RECT){ 0, 0, (LONG)d->desc.ModeDesc.Width, (LONG)d->desc.ModeDesc.Height };
+    if (hr != S_OK && d->n_dirty <= 6) dlog("stream %u GetFrameDirtyRects(cap=%u) -> 0x%08lx (need %u)", d->rep.stream_id, cap, hr, need);
     LeaveCriticalSection(&d->cs);
     return hr;
 }
@@ -295,6 +334,8 @@ static HRESULT STDMETHODCALLTYPE d_MoveRects(IDXGIOutputDuplication *s, UINT cap
     (void)cap; (void)buf;
     if (!req) return E_INVALIDARG;
     *req = 0;
+    DUP(s)->n_move++; DUP(s)->last_call = "GetFrameMoveRects";
+    if (!DUP(s)->acquired) dlog("stream %u GetFrameMoveRects -> INVALID_CALL (no frame held)", DUP(s)->rep.stream_id);
     return DUP(s)->acquired ? S_OK : DXGI_ERROR_INVALID_CALL;
 }
 static HRESULT STDMETHODCALLTYPE d_PtrShape(IDXGIOutputDuplication *s, UINT cap, void *buf, UINT *req, DXGI_OUTDUPL_POINTER_SHAPE_INFO *info)
@@ -303,7 +344,7 @@ static HRESULT STDMETHODCALLTYPE d_PtrShape(IDXGIOutputDuplication *s, UINT cap,
     if (!req || !info) return E_INVALIDARG;
     EnterCriticalSection(&d->cs);
     HRESULT hr = S_OK;
-    InterlockedIncrement(&g_cs.shape_calls);
+    InterlockedIncrement(&g_cs.shape_calls); d->n_shape++; d->last_call = "GetFramePointerShape";
     if (!d->shape_known) { *req = 0; memset(info, 0, sizeof *info); hr = S_OK; }
     else {
         UINT need = d->cur_w * 4 * d->cur_h;
@@ -393,7 +434,8 @@ static int is_placeholder(void *o) { return o && o == (void *)g_ph; }
 static HRESULT STDMETHODCALLTYPE my_GetDesc(IDXGIOutput *s, DXGI_OUTPUT_DESC *d)
 {
     HRESULT hr = g_orig_getdesc(s, d);
-    if (SUCCEEDED(hr) && is_placeholder(s)) {
+    int ph = is_placeholder(s);
+    if (SUCCEEDED(hr) && ph) {
         glock();
         wcscpy(d->DeviceName, g_vd.name);
         d->DesktopCoordinates = g_vd.rect;
@@ -402,12 +444,17 @@ static HRESULT STDMETHODCALLTYPE my_GetDesc(IDXGIOutput *s, DXGI_OUTPUT_DESC *d)
         d->Monitor = NULL;
         LeaveCriticalSection(&g_lock);
     }
+    { static volatile LONG n; if (diag_on() && InterlockedIncrement(&n) <= 300)
+        dlog("IDXGIOutput::GetDesc(%p%s) tid %lu -> 0x%08lx %ls rect %ld,%ld,%ld,%ld attached=%d monitor=%p rot=%d", (void *)s, ph ? " PLACEHOLDER" : "", (unsigned long)GetCurrentThreadId(),
+             hr, SUCCEEDED(hr) ? d->DeviceName : L"-", d->DesktopCoordinates.left, d->DesktopCoordinates.top, d->DesktopCoordinates.right, d->DesktopCoordinates.bottom,
+             (int)d->AttachedToDesktop, (void *)d->Monitor, (int)d->Rotation); }
     return hr;
 }
 static HRESULT STDMETHODCALLTYPE my_GetDesc1(IDXGIOutput6 *s, DXGI_OUTPUT_DESC1 *d)
 {
     HRESULT hr = g_orig_getdesc1(s, d);
-    if (SUCCEEDED(hr) && is_placeholder(s)) {
+    int ph = is_placeholder(s);
+    if (SUCCEEDED(hr) && ph) {
         glock();
         wcscpy(d->DeviceName, g_vd.name);
         d->DesktopCoordinates = g_vd.rect;
@@ -416,12 +463,18 @@ static HRESULT STDMETHODCALLTYPE my_GetDesc1(IDXGIOutput6 *s, DXGI_OUTPUT_DESC1 
         d->Monitor = NULL;
         LeaveCriticalSection(&g_lock);
     }
+    { static volatile LONG n; if (diag_on() && InterlockedIncrement(&n) <= 300)
+        dlog("IDXGIOutput6::GetDesc1(%p%s) tid %lu -> 0x%08lx %ls rect %ld,%ld,%ld,%ld attached=%d monitor=%p cs=%d bits=%u", (void *)s, ph ? " PLACEHOLDER" : "", (unsigned long)GetCurrentThreadId(),
+             hr, SUCCEEDED(hr) ? d->DeviceName : L"-", d->DesktopCoordinates.left, d->DesktopCoordinates.top, d->DesktopCoordinates.right, d->DesktopCoordinates.bottom,
+             (int)d->AttachedToDesktop, (void *)d->Monitor, (int)d->ColorSpace, d->BitsPerColor); }
     return hr;
 }
 
 static HRESULT STDMETHODCALLTYPE my_EnumOutputs(IDXGIAdapter *s, UINT i, IDXGIOutput **o)
 {
     HRESULT hr = g_orig_enumout(s, i, o);
+    { static volatile LONG n; if (diag_on() && InterlockedIncrement(&n) <= 300)
+        dlog("IDXGIAdapter::EnumOutputs(%u) tid %lu -> 0x%08lx obj %p", i, (unsigned long)GetCurrentThreadId(), hr, (hr == S_OK && o) ? (void *)*o : NULL); }
     if (hr != DXGI_ERROR_NOT_FOUND) return hr;
     glock();
     int act = g_vd.active;
@@ -695,6 +748,13 @@ static HRESULT do_duplicate(IDXGIOutput *out, IUnknown *device, const char *vari
     struct plh_cap_open op = { bo[which].output_id, PLH_CAP_BACKEND_AUTO, PLH_CAP_F_CURSOR_METADATA, 0, 4, PLH_FMT_BGRA8 };
     uint32_t rl = 0;
     int r = plh_conn_request(c, PLH_MSG_CAP_OPEN, &op, sizeof op, &d->rep, sizeof d->rep, &rl, 120000);
+    /* The virtual output was just created by VOUT_CREATE: the bridge's output list may not contain it yet
+     * (PLH_E_NOENT = "unknown output"). Wait for it to settle instead of failing the first DuplicateOutput. */
+    for (int tries = 0; virt && r == PLH_E_NOENT && tries < 40; tries++) {
+        Sleep(100);
+        r = plh_conn_request(c, PLH_MSG_CAP_OPEN, &op, sizeof op, &d->rep, sizeof d->rep, &rl, 120000);
+        if (r != PLH_E_NOENT) plog("%s: CAP_OPEN of the new virtual output succeeded after %d retries", variant, tries + 1);
+    }
     if (r && r != PLH_E_AGAIN) { plog("%s: CAP_OPEN error %d", variant, r); goto fail; }
     if (plh_shm_map(&d->shm, d->rep.shm_name, d->rep.shm_size)) { plog("%s: shm %s", variant, d->rep.shm_name); goto fail_close; }
     ID3D11Device_GetImmediateContext(dev, &d->ctx);
@@ -715,6 +775,9 @@ static HRESULT do_duplicate(IDXGIOutput *out, IUnknown *device, const char *vari
     if (slot >= 0) g_dups[slot] = d;
     LeaveCriticalSection(&g_lock);
     if (slot < 0) { plog("%s: too many duplications", variant); goto fail_close; }
+    d->t_open = GetTickCount64(); d->open_tid = GetCurrentThreadId(); d->out_obj = (void *)out;
+    snprintf(d->out_name, sizeof d->out_name, "%s%s", bo[which].name, is_placeholder(out) ? " via placeholder" : "");
+    dlog("%s: IDXGIOutput %p%s virt=%d f2=%d bridge output id %u", variant, (void *)out, is_placeholder(out) ? " PLACEHOLDER" : "", virt, f2, bo[which].output_id);
     plog("%s OK: output %s stream %u %ux%u shm %s (device %p)", variant, bo[which].name, d->rep.stream_id, d->rep.width, d->rep.height, d->rep.shm_name, (void *)dev);
     *pdup = &d->iface;
     return S_OK;
