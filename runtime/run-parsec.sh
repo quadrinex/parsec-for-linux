@@ -62,6 +62,8 @@ if [ -x "$ROOT_PLH/build/bridge/plh-bridge" ] && ! plh_host_bridge_pid >/dev/nul
     BRIDGE_ARGS=(--capture-backend "${PLH_CAPTURE_BACKEND:-kwin}")
     [ "${PLH_BRIDGE_VERBOSE:-0}" = 1 ] && BRIDGE_ARGS+=(-v)
     [ -n "${PLH_BRIDGE_PORT:-}" ] && [ "${PLH_BRIDGE_PORT:-0}" != 0 ] && BRIDGE_ARGS+=(--port "$PLH_BRIDGE_PORT")
+    # Keep the previous session's log: a restart would otherwise erase what a bug report needs.
+    [ -s "$PLH_TRACES/plh-bridge.log" ] && mv -f "$PLH_TRACES/plh-bridge.log" "$PLH_TRACES/plh-bridge.prev.log"
     nohup "$ROOT_PLH/build/bridge/plh-bridge" "${BRIDGE_ARGS[@]}" >"$PLH_TRACES/plh-bridge.log" 2>&1 &
     plh_host_bridge_record $!
     sleep 1
