@@ -90,7 +90,25 @@ watch_screens() {
     done
 }
 
+# Parsec counts a start that does not finish as a crash; after 3 in a row it refuses to load and
+# says it is "out of date or corrupt" (cc*.txt next to its log). Do not kill it while it starts.
+parsec_age() {
+    local pid
+    pid="$(pgrep -of 'parsecd\.exe')" || return 1
+    ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' '
+}
+
+crash_blocked() {
+    grep -qsE '"count": *([3-9]|[1-9][0-9])' "$(dirname "$LOG")"/cc*.txt
+}
+
 stop() {
+    local age i
+    for i in $(seq 30); do
+        age="$(parsec_age)" || break
+        [ "${age:-0}" -ge "${PLH_PARSEC_SETTLE:-20}" ] && break
+        sleep 1
+    done
     # Order: the relay first (it releases keys and buttons on exit), then the daemon.
     pkill -f 'parsec-linux-host[ ]watch' 2>/dev/null
     pkill -f 'plh-pad-relay\.exe' 2>/dev/null
@@ -120,6 +138,9 @@ status() {
             plh-clipsync) pat='plh-clipsync\.exe' ;;
             layout-watch) pat='parsec-linux-host[ ]watch' ;;
         esac
+        if [ "$name" = parsecd ] && pgrep -f "$pat" >/dev/null && crash_blocked; then
+            printf '%-16s blocked (crash counter, see README)\n' "$name"; rc=3; continue
+        fi
         if { [ "$name" = plh-bridge ] && plh_host_bridge_pid >/dev/null; } ||
            { [ "$name" != plh-bridge ] && pgrep -f "$pat" >/dev/null; }; then printf '%-16s running\n' "$name"
         else printf '%-16s stopped\n' "$name"; [ "$name" = layout-watch ] || rc=3; fi
