@@ -7,7 +7,7 @@ Exec=@BIN@ open
 Icon=parsec-for-linux
 Terminal=false
 Categories=Network;RemoteAccess;
-Keywords=parsec;remote;stream;host;
+Keywords=remote;stream;host;game;
 StartupNotify=false
 Actions=Settings;Restart;
 
