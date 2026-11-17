@@ -21,6 +21,7 @@ int  cap_kwin_vout_alive(void);
 void cap_vout_handle(struct plh_client *c, const struct plh_msg_hdr *h, const void *p);
 void cap_vout_client_gone(struct plh_client *c);
 void cap_vout_fini(void);
+int  cap_vout_init(void);   /* starts the no-output keeper */
 #define CAP_VOUT_CONNECTOR "Virtual-" PLH_VOUT_NAME
 
 struct cap_backend_ops {

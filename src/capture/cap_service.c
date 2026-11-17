@@ -290,7 +290,12 @@ static void fini(void)
     cap_vout_fini();
 }
 
+static int init(void)
+{
+    return cap_vout_init();
+}
+
 static const struct plh_service cap_service = {
-    .name = "capture", .id = PLH_SVC_CAPTURE, .handle = handle, .client_gone = client_gone, .fini = fini,
+    .name = "capture", .id = PLH_SVC_CAPTURE, .init = init, .handle = handle, .client_gone = client_gone, .fini = fini,
 };
 PLH_SERVICE_REGISTER(cap_service)

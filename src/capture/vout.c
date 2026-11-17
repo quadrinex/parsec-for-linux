@@ -16,6 +16,12 @@
 static struct plh_client *owners[MAX_OWNERS];
 static int nowners;
 static struct plh_vout_create_reply cur; /* valid while cap_kwin_vout_alive() */
+/* Keeper: with PLH_VIRTUAL_DISPLAY_AUTO on and no real output at all (screens asleep and gone, e.g. while the
+ * session is locked), Wine has no monitor and Parsec drops every client after a few seconds. The bridge then
+ * owns a virtual output itself, so Wine lists it and F2 shows it. The lock screen covers it like any output. */
+static char keeper_tag;
+#define KEEPER ((struct plh_client *)(void *)&keeper_tag)
+static int keeper_zero_ticks;
 
 static int env_flag(const char *n)
 {
@@ -215,6 +221,46 @@ void cap_vout_client_gone(struct plh_client *c)
     owners[i] = owners[--nowners];
     PLH_INFO(MOD, "owner client %u gone (%d owners left)", plh_client_id(c), nowners);
     drop_if_unowned();
+}
+
+static int keeper_owned(void) { return owner_idx(KEEPER) >= 0; }
+
+static void keeper_release(const char *why)
+{
+    int i = owner_idx(KEEPER);
+    if (i < 0) return;
+    owners[i] = owners[--nowners];
+    PLH_INFO(MOD, "keeper: releasing the virtual output (%s, %d other owners)", why, nowners);
+    drop_if_unowned();
+}
+
+static void keeper_tick(void *data)
+{
+    (void)data;
+    if (!env_flag("PLH_VIRTUAL_DISPLAY_AUTO")) { keeper_release("PLH_VIRTUAL_DISPLAY_AUTO is off"); keeper_zero_ticks = 0; return; }
+    struct plh_cap_output outs[CAP_MAX_OUTPUTS];
+    int n = cap_outputs_query(outs, CAP_MAX_OUTPUTS);
+    if (n < 0) return;                            /* compositor unreachable: no decision */
+    int real = 0;
+    for (int i = 0; i < n; i++) if (!(outs[i].flags & PLH_CAP_OUTPUT_VIRTUAL)) real++;
+    if (env_flag("PLH_FAKE_NO_OUTPUTS")) real = 0;
+    if (real > 0) { keeper_zero_ticks = 0; keeper_release("a real output is back"); return; }
+    if (keeper_owned() && !cap_kwin_vout_alive()) {   /* KWin closed it: own a new one */
+        int i = owner_idx(KEEPER);
+        owners[i] = owners[--nowners];
+    }
+    if (keeper_owned() || ++keeper_zero_ticks < 2) return;   /* two ticks in a row: not a hotplug blip */
+    struct plh_vout_create rq = { 0 };
+    struct plh_vout_create_reply rep = { 0 };
+    int rc = create(KEEPER, &rq, &rep);
+    if (rc) PLH_WARN(MOD, "keeper: no real output, cannot create the virtual output (%d)", rc);
+    else PLH_INFO(MOD, "keeper: no real output, holding the virtual output %s %d,%d %ux%u", rep.name, rep.x, rep.y, rep.width, rep.height);
+}
+
+int cap_vout_init(void)
+{
+    if (plh_timer_add(3000000000ull, 3000000000ull, keeper_tick, NULL) < 0) PLH_WARN(MOD, "keeper timer not started");
+    return 0;
 }
 
 void cap_vout_fini(void)
