@@ -103,7 +103,7 @@ Nothing is "done" without a test that proves it. Last update: 2026-10-30 (start)
 ## Checklist for you
 - [ ] Remove the passwordless sudo rule if it only serves this project.
 - [ ] Try the clipboard with a real client.
-- [ ] Set the repository URL in `packaging/arch/PKGBUILD` (`CHANGEME`).
+- [x] Set the repository URL in `packaging/arch/PKGBUILD` (done 2026-11-19).
 - [ ] If you want startup with the session: `bin/parsec-linux-host enable`.
 - [ ] Disabling AMF in the interface removes `amfrt64.dll` and goes back to the software encoder: to be checked (green screen possible).
 - [ ] Connect once with a real client on the English build.
