@@ -1,5 +1,5 @@
 set -u
-cd /home/qdnx/parsec-for-linux
+cd "$(dirname "$(readlink -f "$0")")/../../.."
 B=build/bridge
 RD=$(mktemp -d /tmp/plh-capture/rt.XXXXXX); chmod 700 $RD
 export PLH_BRIDGE_DIR=$RD PLH_INPUT_BACKEND=none PLH_VIRTUAL_DISPLAY=1
